@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+﻿import React, { useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Screen from '../components/Screen';
@@ -9,18 +9,18 @@ import { colors } from '../theme';
 
 export default function WorkspaceScreen() {
   const { workspace, createWorkspace, inviteMember } = useAppContext();
-  const [workspaceName, setWorkspaceName] = useState('?�론?�엔??캡스???�');
+  const [workspaceName, setWorkspaceName] = useState('프론트엔드 캡스톤 팀');
   const [inviteEmail, setInviteEmail] = useState('');
 
   if (!workspace) {
     return (
       <Screen>
         <Text style={styles.eyebrow}>STEP 1</Text>
-        <Text style={styles.title}>?�크?�페?�스�?만들�??�?�을 초�??�세??/Text>
-        <Text style={styles.copy}>로그?????� ?�위�??�의 ?�음, ?�자 매핑, 캘린???�일??관리합?�다.</Text>
-        <Section title="???�크?�페?�스">
+        <Text style={styles.title}>워크스페이스를 만들고 팀원을 초대하세요</Text>
+        <Text style={styles.copy}>로그인한 팀 단위로 회의 녹음, 화자 매핑, 캘린더 할일을 관리합니다.</Text>
+        <Section title="새 워크스페이스">
           <TextInput value={workspaceName} onChangeText={setWorkspaceName} style={styles.input} />
-          <Button title="?�크?�페?�스 ?�성" onPress={() => createWorkspace(workspaceName)} />
+          <Button title="워크스페이스 생성" onPress={() => createWorkspace(workspaceName)} />
         </Section>
       </Screen>
     );
@@ -34,7 +34,7 @@ export default function WorkspaceScreen() {
           <Text style={styles.title}>{workspace.name}</Text>
         </View>
         <View style={styles.badge}>
-          <Text style={styles.badgeText}>{workspace.members.length}�?/Text>
+          <Text style={styles.badgeText}>{workspace.members.length}명</Text>
         </View>
       </View>
 
@@ -53,7 +53,7 @@ export default function WorkspaceScreen() {
         ))}
       </Section>
 
-      <Section title="?�용??초�?">
+      <Section title="사용자 초대">
         <View style={styles.inviteRow}>
           <TextInput
             value={inviteEmail}
@@ -73,7 +73,7 @@ export default function WorkspaceScreen() {
           </TouchableOpacity>
         </View>
         {workspace.invitedEmails.map((email) => (
-          <Text key={email} style={styles.invited}>초�? ?��? {email}</Text>
+          <Text key={email} style={styles.invited}>초대 대기 {email}</Text>
         ))}
       </Section>
     </Screen>

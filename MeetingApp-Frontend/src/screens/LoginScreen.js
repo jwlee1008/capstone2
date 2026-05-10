@@ -1,12 +1,12 @@
 ﻿import React, { useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
 import { COLORS } from '../theme';
 
 export default function LoginScreen() {
-  const { login } = useAppContext();
+  const { login, register } = useAppContext();
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [email, setEmail] = useState('you@capstone.dev');
   const [password, setPassword] = useState('password123');
@@ -17,10 +17,20 @@ export default function LoginScreen() {
 
   const handleSubmit = async () => {
     setIsLoading(true);
-    setTimeout(async () => {
-      await login({ email, name: displayName || email.split('@')[0] });
+    try {
+      const payload = { email, password, name: displayName || email.split('@')[0] };
+      if (isRegisterMode) {
+        await register(payload);
+        setIsRegisterMode(false);
+        Alert.alert('회원가입 완료', '이제 로그인해주세요.');
+      } else {
+        await login(payload);
+      }
+    } catch (error) {
+      Alert.alert('요청 실패', error?.message || '다시 시도해주세요.');
+    } finally {
       setIsLoading(false);
-    }, 350);
+    }
   };
 
   return (
@@ -106,3 +116,4 @@ const styles = StyleSheet.create({
   signupPrompt: { color: COLORS.subtext, fontSize: 14 },
   signupLink: { color: COLORS.primary, fontSize: 14, fontWeight: '700' },
 });
+

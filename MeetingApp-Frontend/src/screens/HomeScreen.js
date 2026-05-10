@@ -21,15 +21,28 @@ function formatDate(isoString) {
 }
 
 export default function HomeScreen({ navigation }) {
-  const { user, workspace, meetings, calendarTasks, createWorkspace, inviteMember } = useAppContext();
+  const {
+    user,
+    workspace,
+    workspaces,
+    invitations,
+    meetings,
+    calendarTasks,
+    calendarEvents,
+    createWorkspace,
+    selectWorkspace,
+    acceptInvitation,
+    declineInvitation,
+    inviteMember,
+  } = useAppContext();
   const [workspaceName, setWorkspaceName] = useState('프론트엔드 캡스톤 팀');
   const [inviteEmail, setInviteEmail] = useState('');
   const recentMeetings = meetings.slice(0, 3);
   const totalSessions = meetings.reduce((acc, meeting) => acc + meeting.sessions.length, 0);
 
-  const handleInvite = () => {
+  const handleInvite = async () => {
     if (!inviteEmail.trim()) return Alert.alert('입력 오류', '초대할 이메일을 입력해주세요.');
-    inviteMember(inviteEmail);
+    await inviteMember(inviteEmail);
     setInviteEmail('');
   };
 
@@ -46,8 +59,26 @@ export default function HomeScreen({ navigation }) {
         {!workspace ? (
           <View style={styles.workspaceCard}>
             <View style={styles.workspaceIconWrap}><Ionicons name="people-outline" size={24} color={COLORS.primary} /></View>
-            <Text style={styles.workspaceTitle}>워크스페이스 생성</Text>
-            <Text style={styles.workspaceDesc}>팀 워크스페이스를 만들고 멤버를 초대해 회의 기록을 함께 관리하세요.</Text>
+            <Text style={styles.workspaceTitle}>워크스페이스 목록</Text>
+            <Text style={styles.workspaceDesc}>참여 중인 워크스페이스를 선택하거나 새 워크스페이스를 만드세요.</Text>
+            {workspaces.map((item) => (
+              <TouchableOpacity key={item.id} style={styles.workspaceListItem} onPress={() => selectWorkspace(item.id)}>
+                <View><Text style={styles.workspaceListName}>{item.name}</Text><Text style={styles.workspaceListMeta}>{item.ownerName || '팀 워크스페이스'}</Text></View>
+                <Ionicons name="chevron-forward" size={17} color={COLORS.border} />
+              </TouchableOpacity>
+            ))}
+            {invitations.length > 0 && (
+              <View style={styles.inviteInbox}>
+                <Text style={styles.inviteInboxTitle}>받은 초대함</Text>
+                {invitations.map((item) => (
+                  <View key={item.id} style={styles.inviteInboxRow}>
+                    <View style={{ flex: 1 }}><Text style={styles.workspaceListName}>{item.workspaceName}</Text><Text style={styles.workspaceListMeta}>{item.inviterName} 님의 초대</Text></View>
+                    <TouchableOpacity style={styles.acceptBtn} onPress={() => acceptInvitation(item.id)}><Text style={styles.acceptText}>수락</Text></TouchableOpacity>
+                    <TouchableOpacity style={styles.declineBtn} onPress={() => declineInvitation(item.id)}><Text style={styles.declineText}>거절</Text></TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
             <View style={styles.inputWrap}><TextInput value={workspaceName} onChangeText={setWorkspaceName} style={styles.input} placeholder="워크스페이스 이름" /></View>
             <TouchableOpacity style={styles.createWorkspaceBtn} onPress={() => createWorkspace(workspaceName)} activeOpacity={0.85}><Text style={styles.createWorkspaceText}>워크스페이스 만들기</Text></TouchableOpacity>
           </View>
@@ -69,7 +100,7 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.statsRow}>
           <Stat icon="people-outline" bg="#EEF2FF" color={COLORS.primary} value={meetings.length} label="전체 회의" />
           <Stat icon="checkmark-circle-outline" bg="#F0FDF4" color={COLORS.success} value={totalSessions} label="완료 세션" />
-          <Stat icon="calendar-outline" bg="#FFFBEB" color={COLORS.warning} value={calendarTasks.length} label="등록 할일" />
+          <Stat icon="calendar-outline" bg="#FFFBEB" color={COLORS.warning} value={calendarTasks.length + calendarEvents.length} label="할일/일정" />
         </View>
 
         <TouchableOpacity style={styles.meetingMainButton} onPress={() => navigation.navigate('MeetingList')} activeOpacity={0.88}>
@@ -111,6 +142,16 @@ const styles = StyleSheet.create({
   workspaceCard: { backgroundColor: COLORS.surface, borderRadius: 18, padding: 18, marginBottom: 18, ...CARD_SHADOW }, workspaceIconWrap: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', marginBottom: 12 }, workspaceHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }, workspaceLabel: { fontSize: 11, fontWeight: '700', color: COLORS.primary, marginBottom: 3 }, workspaceTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text }, workspaceDesc: { fontSize: 13, color: COLORS.subtext, lineHeight: 19, marginTop: 6, marginBottom: 14 },
   inputWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.inputBg, borderRadius: 12, borderWidth: 1.5, borderColor: 'transparent', paddingHorizontal: 12, height: 48 }, input: { flex: 1, color: COLORS.text, fontSize: 14 }, createWorkspaceBtn: { height: 50, borderRadius: 14, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', marginTop: 12 }, createWorkspaceText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
   memberBadge: { backgroundColor: '#EEF2FF', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 5 }, memberBadgeText: { color: COLORS.primary, fontWeight: '700', fontSize: 12 }, memberRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 }, memberChip: { backgroundColor: '#F1F5F9', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }, memberChipText: { color: COLORS.text, fontWeight: '600', fontSize: 12 }, inviteRow: { flexDirection: 'row', gap: 8, marginTop: 14 }, inviteInputWrap: { flex: 1 }, inviteBtn: { width: 48, height: 48, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' }, invitedText: { fontSize: 12, color: COLORS.subtext, marginTop: 8 },
+  workspaceListItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderTopWidth: 1, borderTopColor: COLORS.border },
+  workspaceListName: { fontSize: 14, fontWeight: '700', color: COLORS.text },
+  workspaceListMeta: { fontSize: 11, color: COLORS.subtext, marginTop: 2 },
+  inviteInbox: { marginTop: 12, marginBottom: 12, borderTopWidth: 1, borderTopColor: COLORS.border },
+  inviteInboxTitle: { fontSize: 12, fontWeight: '700', color: COLORS.primary, marginTop: 12, marginBottom: 4 },
+  inviteInboxRow: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingVertical: 8 },
+  acceptBtn: { backgroundColor: COLORS.primary, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 6 },
+  acceptText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
+  declineBtn: { backgroundColor: '#F1F5F9', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 6 },
+  declineText: { color: COLORS.subtext, fontSize: 11, fontWeight: '700' },
   statsRow: { flexDirection: 'row', gap: 10, marginBottom: 20 }, statCard: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 }, statIconWrap: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 8 }, statValue: { fontSize: 20, fontWeight: '700', color: COLORS.text }, statLabel: { fontSize: 11, color: COLORS.subtext, marginTop: 2, textAlign: 'center' },
   meetingMainButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: COLORS.primary, borderRadius: 20, padding: 20, marginBottom: 16, shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 16, elevation: 10 }, meetingMainLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 }, meetingMainIconWrap: { width: 56, height: 56, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', marginRight: 16 }, meetingMainTextWrap: { flex: 1 }, meetingMainTitle: { fontSize: 22, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0 }, meetingMainDesc: { fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 3 },
   noticeBanner: { backgroundColor: '#FDF4FF', borderRadius: 14, padding: 14, marginBottom: 24, borderWidth: 1, borderColor: '#E9D5FF' }, noticeLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 }, noticeBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.secondary, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, gap: 3 }, noticeBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' }, noticeTitle: { fontSize: 14, fontWeight: '700', color: COLORS.text }, noticeDesc: { fontSize: 11, color: COLORS.subtext, marginTop: 1 },
