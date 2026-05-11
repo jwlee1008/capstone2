@@ -5,6 +5,7 @@ const TRANSCRIBE_TIMEOUT_MS = 12 * 60 * 1000;
 
 let accessToken = null;
 let refreshToken = null;
+let authExpiredHandler = null;
 
 const storage = {
   get(key) {
@@ -50,6 +51,10 @@ export function clearTokens() {
   storage.remove('refreshToken');
 }
 
+export function setAuthExpiredHandler(handler) {
+  authExpiredHandler = typeof handler === 'function' ? handler : null;
+}
+
 async function parseResponse(response) {
   const text = await response.text();
   if (!text) return null;
@@ -93,6 +98,10 @@ async function request(path, options = {}, retry = true) {
 
   const data = await parseResponse(response);
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+      clearTokens();
+      authExpiredHandler?.();
+    }
     const message = data?.message || data || `HTTP ${response.status}`;
     console.error('[api] request failed', options.method || 'GET', `${API_BASE_URL}${path}`, response.status, data);
     throw new Error(String(message));

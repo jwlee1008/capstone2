@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
-import { api } from '../services/api';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { api, setAuthExpiredHandler } from '../services/api';
 
 const AppContext = createContext(null);
 
@@ -196,6 +196,11 @@ export function AppProvider({ children }) {
     setNotionConnected(false);
     setIsApiMode(false);
   };
+
+  useEffect(() => {
+    setAuthExpiredHandler(resetAppState);
+    return () => setAuthExpiredHandler(null);
+  }, []);
 
   const getMeetingById = (id) => meetings.find((meeting) => String(meeting.id) === String(id));
 
