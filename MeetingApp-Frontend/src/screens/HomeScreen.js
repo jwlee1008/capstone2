@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
 import { CARD_SHADOW, COLORS } from '../theme';
+import UserInviteSearch from '../components/UserInviteSearch';
 
 const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -36,7 +37,6 @@ export default function HomeScreen({ navigation }) {
     inviteMember,
   } = useAppContext();
   const [workspaceName, setWorkspaceName] = useState('');
-  const [inviteEmail, setInviteEmail] = useState('');
   const [pendingAction, setPendingAction] = useState(null);
   const recentMeetings = meetings.slice(0, 3);
   const totalSessions = meetings.reduce((acc, meeting) => acc + meeting.sessions.length, 0);
@@ -63,20 +63,6 @@ export default function HomeScreen({ navigation }) {
       await selectWorkspace(workspaceId);
     } catch (error) {
       Alert.alert('불러오기 실패', error?.message || '워크스페이스를 불러오지 못했습니다.');
-    } finally {
-      setPendingAction(null);
-    }
-  };
-
-  const handleInvite = async () => {
-    if (!inviteEmail.trim()) return Alert.alert('입력 오류', '초대할 이메일을 입력해주세요.');
-    try {
-      setPendingAction('invite');
-      await inviteMember(inviteEmail);
-      Alert.alert('초대 완료', '가입된 이메일로 초대를 보냈습니다.');
-      setInviteEmail('');
-    } catch (error) {
-      Alert.alert('초대 실패', error?.message || '초대를 보내지 못했습니다.');
     } finally {
       setPendingAction(null);
     }
@@ -119,10 +105,12 @@ export default function HomeScreen({ navigation }) {
               </View>
               <View style={styles.memberRow}>{workspace.members.length === 0 ? <Text style={styles.noMemberText}>멤버를 불러오는 중입니다.</Text> : workspace.members.map((member) => <View key={member.id} style={styles.memberChip}><Text style={styles.memberChipText}>{member.name}</Text></View>)}</View>
               <View style={styles.inviteRow}>
-                <View style={[styles.inputWrap, styles.inviteInputWrap]}><TextInput value={inviteEmail} onChangeText={setInviteEmail} style={styles.input} placeholder="팀원 초대 이메일" autoCapitalize="none" /></View>
-                <TouchableOpacity style={[styles.inviteBtn, pendingAction === 'invite' && styles.actionDisabled]} onPress={handleInvite} disabled={pendingAction === 'invite'}><Ionicons name="send" size={18} color="#FFFFFF" /></TouchableOpacity>
+                <UserInviteSearch
+                  description="이름이나 이메일로 가입된 사용자를 검색한 뒤 선택해서 초대하세요."
+                  invitedEmails={workspace.invitedEmails}
+                  onInvite={inviteMember}
+                />
               </View>
-              {workspace.invitedEmails.map((email) => <Text key={email} style={styles.invitedText}>초대 대기: {email}</Text>)}
             </View>
           )}
           <View style={styles.workspaceHeaderRow}>

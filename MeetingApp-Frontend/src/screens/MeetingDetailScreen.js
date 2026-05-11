@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAppContext } from '../context/AppContext';
 import { COLORS } from '../theme';
+import UserInviteSearch from '../components/UserInviteSearch';
 
 const formatDateTime = (iso) => { const d = new Date(iso); return isNaN(d.getTime()) ? '-' : `${d.getMonth() + 1}월 ${d.getDate()}일 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
@@ -14,8 +15,6 @@ export default function MeetingDetailScreen({ navigation, route }) {
   const meeting = getMeetingById(meetingId);
   const [selectedSpeaker, setSelectedSpeaker] = useState(null);
   const [manualTask, setManualTask] = useState({ title: '', assignee: '', dueDate: '' });
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [isInviting, setIsInviting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const latestSession = meeting?.sessions?.[0];
   const speakerKeys = useMemo(() => latestSession ? Array.from(new Set(latestSession.transcript.map((s) => s.speakerKey))) : [], [latestSession]);
@@ -48,25 +47,11 @@ export default function MeetingDetailScreen({ navigation, route }) {
       Alert.alert('등록 실패', error?.message || '할일을 등록하지 못했습니다.');
     }
   };
-  const handleInvite = async () => {
-    if (!inviteEmail.trim()) return Alert.alert('입력 오류', '회원가입 ID로 사용한 이메일을 입력해주세요.');
-    try {
-      setIsInviting(true);
-      await inviteMember(inviteEmail);
-      Alert.alert('초대 완료', '가입된 이메일로 초대를 보냈습니다. 상대가 수락하면 이 워크스페이스의 회의 목록을 볼 수 있습니다.');
-      setInviteEmail('');
-    } catch (error) {
-      Alert.alert('초대 실패', error?.message || '초대를 보내지 못했습니다.');
-    } finally {
-      setIsInviting(false);
-    }
-  };
-
   return (
     <SafeAreaView style={styles.safeArea} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.infoCard}><View style={styles.infoCardTop}><View style={styles.meetingAvatarWrap}><Text style={styles.meetingAvatarText}>{meeting.name.charAt(0)}</Text></View><View style={styles.infoCardText}><Text style={styles.meetingNameLarge}>{meeting.name}</Text><Text style={styles.meetingCreateDate}>{formatDateTime(meeting.createdAt)}</Text></View></View>{meeting.description ? <View style={styles.descriptionBox}><Text style={styles.descriptionText}>{meeting.description}</Text></View> : null}<View style={styles.statsRow}><InfoStat value={meeting.participants.length} label="참여자" /><View style={styles.statDivider} /><InfoStat value={meeting.sessions.length} label="녹음 파일" /><View style={styles.statDivider} /><InfoStat value={latestSession?.tasks?.length || 0} label="제안 할일" /></View></View>
-        <View style={styles.inviteCard}><View style={styles.analysisCardHeader}><Ionicons name="person-add-outline" size={17} color={COLORS.primary} /><Text style={styles.analysisCardTitle}>워크스페이스 초대</Text></View><Text style={styles.cardDesc}>회원가입 ID로 사용한 이메일을 입력하면 워크스페이스 초대가 전송됩니다.</Text><View style={styles.inviteRow}><TextInput style={[styles.manualInput, styles.inviteInput]} placeholder="teammate@example.com" value={inviteEmail} onChangeText={setInviteEmail} autoCapitalize="none" keyboardType="email-address" /><TouchableOpacity style={[styles.inviteBtn, isInviting && styles.inviteBtnDisabled]} onPress={handleInvite} disabled={isInviting}>{isInviting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="send" size={18} color="#FFFFFF" />}</TouchableOpacity></View>{workspace?.invitedEmails?.map((email) => <Text key={email} style={styles.invitedText}>초대 대기: {email}</Text>)}</View>
+        <View style={styles.inviteCard}><View style={styles.analysisCardHeader}><Ionicons name="person-add-outline" size={17} color={COLORS.primary} /><Text style={styles.analysisCardTitle}>워크스페이스 초대</Text></View><UserInviteSearch description="이름이나 이메일로 가입된 사용자를 검색한 뒤 선택해서 초대하세요." invitedEmails={workspace?.invitedEmails || []} onInvite={inviteMember} /></View>
         <View style={styles.controlArea}><TouchableOpacity style={styles.uploadBtn} onPress={handlePickFile} activeOpacity={0.85} disabled={isUploading}><View style={styles.uploadBtnLeft}><View style={styles.uploadIconWrap}>{isUploading ? <ActivityIndicator size="small" color={COLORS.primary} /> : <Ionicons name="folder-open-outline" size={22} color={COLORS.primary} />}</View><View style={{ flex: 1 }}><Text style={styles.uploadBtnTitle}>{isUploading ? '업로드 및 STT 진행중' : '녹음 파일 업로드'}</Text><Text style={styles.uploadBtnDesc}>서버에 녹음 파일을 저장하고 STT를 시작합니다</Text></View></View><Ionicons name="chevron-forward" size={18} color={COLORS.border} /></TouchableOpacity></View>
         {latestSession ? <View style={styles.analysisSection}>
           <SectionTitle title="처리 상태" /><Card><View style={styles.analysisCardHeader}>{latestSession.processStatus === 'done' ? <Ionicons name="checkmark-circle-outline" size={18} color={COLORS.success} /> : <ActivityIndicator size="small" color={COLORS.warning} />}<Text style={styles.analysisCardTitle}>{latestSession.processStatus === 'done' ? '대화 내용 확인 가능' : '기록 정리중'}</Text></View><Text style={styles.cardDesc}>화자 구분: 화자A, 화자B, 화자C</Text></Card>

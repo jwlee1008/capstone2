@@ -4,13 +4,13 @@ import { Ionicons } from '@expo/vector-icons';
 import Screen from '../components/Screen';
 import Section from '../components/Section';
 import Button from '../components/Button';
+import UserInviteSearch from '../components/UserInviteSearch';
 import { useAppContext } from '../context/AppContext';
 import { colors } from '../theme';
 
 export default function WorkspaceScreen() {
   const { workspace, createWorkspace, inviteMember } = useAppContext();
   const [workspaceName, setWorkspaceName] = useState('');
-  const [inviteEmail, setInviteEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleCreateWorkspace = async () => {
@@ -22,21 +22,6 @@ export default function WorkspaceScreen() {
       setWorkspaceName('');
     } catch (error) {
       Alert.alert('생성 실패', error?.message || '워크스페이스를 만들지 못했습니다.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleInvite = async () => {
-    const email = inviteEmail.trim();
-    if (!email) return Alert.alert('입력 오류', '초대할 이메일을 입력해주세요.');
-    try {
-      setIsSubmitting(true);
-      await inviteMember(email);
-      setInviteEmail('');
-      Alert.alert('초대 완료', '가입된 이메일로 초대를 보냈습니다.');
-    } catch (error) {
-      Alert.alert('초대 실패', error?.message || '초대를 보내지 못했습니다.');
     } finally {
       setIsSubmitting(false);
     }
@@ -84,25 +69,11 @@ export default function WorkspaceScreen() {
       </Section>
 
       <Section title="사용자 초대">
-        <View style={styles.inviteRow}>
-          <TextInput
-            value={inviteEmail}
-            onChangeText={setInviteEmail}
-            placeholder="teammate@company.com"
-            autoCapitalize="none"
-            style={[styles.input, styles.inviteInput]}
-          />
-          <TouchableOpacity
-            style={[styles.iconButton, isSubmitting && styles.disabledButton]}
-            onPress={handleInvite}
-            disabled={isSubmitting}
-          >
-            <Ionicons name="send" size={19} color="#FFFFFF" />
-          </TouchableOpacity>
-        </View>
-        {workspace.invitedEmails.map((email) => (
-          <Text key={email} style={styles.invited}>초대 대기 {email}</Text>
-        ))}
+        <UserInviteSearch
+          description="이름이나 이메일로 가입된 사용자를 검색한 뒤 선택해서 초대하세요."
+          invitedEmails={workspace.invitedEmails}
+          onInvite={inviteMember}
+        />
       </Section>
     </Screen>
   );

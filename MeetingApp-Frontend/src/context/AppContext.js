@@ -359,6 +359,11 @@ export function AppProvider({ children }) {
     }));
   };
 
+  const searchUsers = async (query) => {
+    if (!query.trim()) return [];
+    return normalizeList(await api.searchUsers(query.trim())).map(mapUser);
+  };
+
   const addMeeting = async (meetingData) => {
     if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
     const created = await api.createMeeting({ workspaceId: workspace.id, title: meetingData.name });
@@ -506,6 +511,7 @@ export function AppProvider({ children }) {
     acceptInvitation,
     declineInvitation,
     inviteMember,
+    searchUsers,
     addMeeting,
     deleteMeeting,
     refreshMeetingData,

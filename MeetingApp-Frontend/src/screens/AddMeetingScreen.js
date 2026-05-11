@@ -1,28 +1,57 @@
-import React, { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
 import { COLORS } from '../theme';
 
-const isEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-
 export default function AddMeetingScreen({ navigation }) {
-  const { workspace, addMeeting, inviteMember } = useAppContext();
+  const { workspace, addMeeting, inviteMember, searchUsers } = useAppContext();
   const [meetingName, setMeetingName] = useState('');
   const [inviteInput, setInviteInput] = useState('');
   const [inviteEmails, setInviteEmails] = useState([]);
+  const [inviteResults, setInviteResults] = useState([]);
+  const [isSearchingUsers, setIsSearchingUsers] = useState(false);
   const [description, setDescription] = useState('');
   const [focusedField, setFocusedField] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
 
-  const addInviteEmail = () => {
-    const email = inviteInput.trim().toLowerCase();
-    if (!email) return;
-    if (!isEmail(email)) return Alert.alert('입력 오류', '회원가입 ID로 사용한 이메일을 입력해주세요.');
+  useEffect(() => {
+    const keyword = inviteInput.trim();
+    if (keyword.length < 2) {
+      setInviteResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchingUsers(true);
+      try {
+        setInviteResults(await searchUsers(keyword));
+      } catch {
+        setInviteResults([]);
+      } finally {
+        setIsSearchingUsers(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [inviteInput, searchUsers]);
+
+  const addInviteUser = (user) => {
+    const email = (user.email || '').trim().toLowerCase();
+    if (!email) return Alert.alert('사용자 선택', '이메일이 있는 사용자를 선택해주세요.');
     if (inviteEmails.includes(email)) return Alert.alert('중복', '이미 추가된 이메일입니다.');
     setInviteEmails((prev) => [...prev, email]);
     setInviteInput('');
+    setInviteResults([]);
+  };
+
+  const addInviteEmail = () => {
+    if (inviteResults.length === 1) {
+      addInviteUser(inviteResults[0]);
+      return;
+    }
+    Alert.alert('사용자 선택', '검색 결과에서 초대할 사용자를 선택해주세요.');
   };
 
   const create = async () => {
@@ -77,17 +106,31 @@ export default function AddMeetingScreen({ navigation }) {
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.label}>워크스페이스 초대 이메일 <Text style={styles.optional}>(선택)</Text></Text>
+            <Text style={styles.label}>워크스페이스 초대 사용자 <Text style={styles.optional}>(선택)</Text></Text>
             <View style={styles.participantInputRow}>
               <View style={[styles.inputWrap, styles.participantInputWrap, focusedField === 'invite' && styles.inputFocused]}>
                 <Ionicons name="mail-outline" size={18} color={COLORS.subtext} style={styles.inputIcon} />
-                <TextInput style={styles.input} placeholder="가입한 이메일 입력 후 추가" placeholderTextColor="#A0AEC0" value={inviteInput} onChangeText={setInviteInput} onSubmitEditing={addInviteEmail} autoCapitalize="none" keyboardType="email-address" onFocus={() => setFocusedField('invite')} onBlur={() => setFocusedField(null)} />
+                <TextInput style={styles.input} placeholder="이름 또는 이메일 검색 후 선택" placeholderTextColor="#A0AEC0" value={inviteInput} onChangeText={setInviteInput} onSubmitEditing={addInviteEmail} autoCapitalize="none" onFocus={() => setFocusedField('invite')} onBlur={() => setFocusedField(null)} />
+                {isSearchingUsers ? <ActivityIndicator size="small" color={COLORS.primary} /> : null}
               </View>
               <TouchableOpacity style={[styles.addParticipantBtn, !inviteInput.trim() && styles.addBtnDisabled]} onPress={addInviteEmail} disabled={!inviteInput.trim()}>
                 <Ionicons name="add" size={22} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
             <Text style={styles.helperText}>초대받은 사용자가 로그인 후 수락하면 이 워크스페이스의 회의 목록을 볼 수 있습니다.</Text>
+            {inviteResults.length > 0 ? (
+              <View style={styles.userResults}>
+                {inviteResults.map((user) => (
+                  <TouchableOpacity key={user.email || user.id} style={styles.userResultRow} onPress={() => addInviteUser(user)}>
+                    <View style={styles.userResultAvatar}><Text style={styles.userResultAvatarText}>{(user.name || user.email || '?').charAt(0)}</Text></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.userResultName}>{user.name || '이름 없음'}</Text>
+                      <Text style={styles.userResultEmail}>{user.email}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
             <View style={styles.participantTags}>
               {inviteEmails.map((email) => (
                 <View key={email} style={styles.participantTag}>
@@ -141,6 +184,12 @@ const styles = StyleSheet.create({
   participantInputWrap: { flex: 1 },
   addParticipantBtn: { width: 50, height: 50, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
   addBtnDisabled: { opacity: 0.4 },
+  userResults: { borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, backgroundColor: COLORS.surface, overflow: 'hidden', marginTop: 10 },
+  userResultRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  userResultAvatar: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  userResultAvatarText: { color: COLORS.primary, fontWeight: '700' },
+  userResultName: { color: COLORS.text, fontWeight: '700', fontSize: 13 },
+  userResultEmail: { color: COLORS.subtext, fontSize: 12, marginTop: 1 },
   participantTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
   participantTag: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 10, paddingVertical: 5, paddingLeft: 6, paddingRight: 8, borderWidth: 1, borderColor: COLORS.border, gap: 6 },
   participantAvatar: { width: 24, height: 24, borderRadius: 7, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
