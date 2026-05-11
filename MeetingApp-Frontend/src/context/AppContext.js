@@ -125,6 +125,26 @@ function mapTask(raw) {
   };
 }
 
+function getTaskStatsFallback(tasks = []) {
+  return {
+    total: tasks.length,
+    todo: tasks.filter((task) => task.status === 'TODO').length,
+    inProgress: tasks.filter((task) => task.status === 'IN_PROGRESS').length,
+    done: tasks.filter((task) => task.status === 'DONE').length,
+  };
+}
+
+function normalizeTaskStats(stats, tasks = []) {
+  const fallback = getTaskStatsFallback(tasks);
+  if (!stats) return fallback;
+  return {
+    total: stats.total ?? stats.totalCount ?? fallback.total,
+    todo: stats.todo ?? stats.TODO ?? stats.todoCount ?? fallback.todo,
+    inProgress: stats.inProgress ?? stats.in_progress ?? stats.IN_PROGRESS ?? stats.inProgressCount ?? fallback.inProgress,
+    done: stats.done ?? stats.DONE ?? stats.doneCount ?? fallback.done,
+  };
+}
+
 function mapEvent(raw) {
   return {
     id: raw.id,
@@ -219,7 +239,7 @@ export function AppProvider({ children }) {
   const getMeetingById = (id) => meetings.find((meeting) => String(meeting.id) === String(id));
 
   const loadInvitations = async () => {
-    const rows = await api.getInvitations().catch(() => []);
+    const rows = normalizeList(await api.getInvitations().catch(() => []));
     const mapped = rows.filter((item) => (item.status || 'PENDING') === 'PENDING').map(mapInvitation);
     setInvitations(mapped);
     return mapped;
@@ -245,6 +265,7 @@ export function AppProvider({ children }) {
       setMeetings([]);
       setCalendarTasks([]);
       setCalendarEvents([]);
+      setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
       return;
     }
 
@@ -270,7 +291,7 @@ export function AppProvider({ children }) {
     setMeetings(backendMeetings.map((meeting) => mapMeeting(meeting, members)));
     setCalendarTasks(tasks.map(mapTask));
     setCalendarEvents(events.map(mapEvent));
-    if (stats) setTaskStats(stats);
+    setTaskStats(normalizeTaskStats(stats, tasks));
     return mappedWorkspace;
   };
 

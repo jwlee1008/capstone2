@@ -84,10 +84,10 @@ export default function CalendarScreen() {
         <View style={styles.notionCard}><View style={styles.notionTop}><View style={styles.notionIconWrap}><Ionicons name="calendar-clear-outline" size={22} color={COLORS.primary} /></View><View style={{ flex: 1 }}><Text style={styles.notionTitle}>{notionConnected ? '외부 캘린더 연결됨' : '외부 캘린더 연결 대기'}</Text><Text style={styles.notionDesc}>인앱 캘린더의 할일과 일정을 외부 캘린더로 내보냅니다.</Text></View></View><TouchableOpacity style={[styles.notionBtn, notionConnected && styles.notionBtnConnected]} onPress={handleExport} activeOpacity={0.85}><Ionicons name={notionConnected ? 'cloud-upload-outline' : 'link-outline'} size={18} color="#FFFFFF" /><Text style={styles.notionBtnText}>{notionConnected ? '캘린더로 내보내기' : '캘린더 연결하기'}</Text></TouchableOpacity></View>
 
         <View style={styles.statsRow}>
-          <Stat label="전체" value={taskStats.total || calendarTasks.length} />
-          <Stat label="TODO" value={taskStats.todo || calendarTasks.filter((task) => task.statusCode === 'TODO').length} />
-          <Stat label="진행" value={taskStats.inProgress || calendarTasks.filter((task) => task.statusCode === 'IN_PROGRESS').length} />
-          <Stat label="완료" value={taskStats.done || calendarTasks.filter((task) => task.statusCode === 'DONE').length} />
+          <Stat label="전체" value={taskStats.total ?? calendarTasks.length} />
+          <Stat label="TODO" value={taskStats.todo ?? calendarTasks.filter((task) => task.statusCode === 'TODO').length} />
+          <Stat label="진행" value={taskStats.inProgress ?? calendarTasks.filter((task) => task.statusCode === 'IN_PROGRESS').length} />
+          <Stat label="완료" value={taskStats.done ?? calendarTasks.filter((task) => task.statusCode === 'DONE').length} />
         </View>
 
         <Text style={styles.sectionTitle}>일정</Text>
