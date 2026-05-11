@@ -197,16 +197,6 @@ export const api = {
     });
   },
 
-  googleLogin(code) {
-    return request('/api/oauth2/google/callback', {
-      method: 'POST',
-      body: JSON.stringify({ code }),
-    }).then((data) => {
-      setTokens(data);
-      return data;
-    });
-  },
-
   register(email, password, displayName) {
     return request('/api/user/register', {
       method: 'POST',
@@ -238,10 +228,6 @@ export const api = {
     return request('/api/workspaces');
   },
 
-  deleteWorkspace(workspaceId) {
-    return request(`/api/workspaces/${workspaceId}`, { method: 'DELETE' });
-  },
-
   getInvitations() {
     return request('/api/invitations');
   },
@@ -263,10 +249,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email }),
     });
-  },
-
-  leaveWorkspace(workspaceId) {
-    return request(`/api/workspaces/${workspaceId}/members/me`, { method: 'DELETE' });
   },
 
   searchUsers(query) {
@@ -309,12 +291,6 @@ export const api = {
       method: 'POST',
       body: formData,
       timeoutMs: UPLOAD_TIMEOUT_MS,
-    });
-  },
-
-  updateRecordingStatus(recordingId, status) {
-    return request(`/api/recordings/${recordingId}/status?status=${encodeURIComponent(status)}`, {
-      method: 'PATCH',
     });
   },
 
@@ -383,13 +359,6 @@ export const api = {
     return request('/api/events', {
       method: 'POST',
       body: JSON.stringify(event),
-    });
-  },
-
-  updateEvent(eventId, updates) {
-    return request(`/api/events/${eventId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(updates),
     });
   },
 
