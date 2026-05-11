@@ -113,6 +113,10 @@ function getAssetName(asset) {
   return asset?.name || asset?.file?.name || 'recording.m4a';
 }
 
+function getUploadAssetName(asset, fallback = 'upload.bin') {
+  return asset?.name || asset?.file?.name || fallback;
+}
+
 function inferAudioContentType(filename, fallback) {
   if (fallback) return fallback;
   const ext = String(filename || '').split('.').pop()?.toLowerCase();
@@ -123,6 +127,22 @@ function inferAudioContentType(filename, fallback) {
   if (ext === 'ogg') return 'audio/ogg';
   if (ext === 'webm') return 'audio/webm';
   return 'audio/mp4';
+}
+
+function inferImageContentType(filename, fallback) {
+  if (fallback) return fallback;
+  const ext = String(filename || '').split('.').pop()?.toLowerCase();
+  if (ext === 'png') return 'image/png';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'gif') return 'image/gif';
+  return 'image/jpeg';
+}
+
+async function getUploadBody(asset) {
+  if (asset?.file) return asset.file;
+  if (!asset?.uri) throw new Error('업로드할 파일을 찾을 수 없습니다.');
+  const response = await fetch(asset.uri);
+  return response.blob();
 }
 
 async function appendRecordingFile(formData, asset) {
@@ -389,6 +409,21 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ profileImageUrl }),
     });
+  },
+
+  getProfileImageUploadUrl(filename) {
+    return request(`/api/user/presigned-url?filename=${encodeURIComponent(filename)}`);
+  },
+
+  async uploadToPresignedUrl(presignedUrl, asset, fallbackName = 'upload.bin') {
+    const filename = getUploadAssetName(asset, fallbackName);
+    const contentType = inferImageContentType(filename, asset?.mimeType || asset?.file?.type);
+    const response = await fetch(presignedUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      body: await getUploadBody(asset),
+    });
+    if (!response.ok) throw new Error(`파일 업로드에 실패했습니다. HTTP ${response.status}`);
   },
 
   updatePassword(payload) {

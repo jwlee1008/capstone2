@@ -144,7 +144,7 @@ function mapUser(raw, fallback = {}) {
     userId: raw?.id || raw?.userId || fallback.id || fallback.userId,
     email: raw?.email || fallback.email || '',
     name: raw?.name || fallback.name || raw?.email || fallback.email || '사용자',
-    profileImg: raw?.profileImg || fallback.profileImg,
+    profileImg: raw?.profileImg || raw?.profileImageUrl || fallback.profileImg || fallback.profileImageUrl,
     role: raw?.role || fallback.role || '서비스 운영',
     status: raw?.status || fallback.status,
   };
@@ -312,6 +312,26 @@ export function AppProvider({ children }) {
   const updateUser = async (updates) => {
     if (isApiMode && updates.name) await api.updateProfileName(updates.name).catch(() => null);
     setUser((prev) => ({ ...prev, ...updates }));
+  };
+
+  const updateProfileImageFromAsset = async (asset) => {
+    const filename = asset?.name || asset?.file?.name || `profile-${Date.now()}.jpg`;
+    const { presignedUrl } = await api.getProfileImageUploadUrl(filename);
+    if (!presignedUrl) throw new Error('프로필 이미지 업로드 URL을 받지 못했습니다.');
+    await api.uploadToPresignedUrl(presignedUrl, asset, filename);
+    const profileImageUrl = presignedUrl.split('?')[0];
+    await api.updateProfileImage(profileImageUrl);
+    setUser((prev) => ({ ...prev, profileImg: profileImageUrl }));
+    return profileImageUrl;
+  };
+
+  const changePassword = async ({ currentPassword, newPassword }) => {
+    await api.updatePassword({ currentPassword, newPassword });
+  };
+
+  const deleteAccount = async () => {
+    await api.deleteAccount();
+    resetAppState();
   };
 
   const selectWorkspace = async (workspaceId) => {
@@ -506,6 +526,9 @@ export function AppProvider({ children }) {
     register,
     logout,
     updateUser,
+    updateProfileImageFromAsset,
+    changePassword,
+    deleteAccount,
     selectWorkspace,
     createWorkspace,
     acceptInvitation,
