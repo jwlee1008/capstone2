@@ -1,30 +1,205 @@
-﻿import React, { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
 import { COLORS } from '../theme';
 
 export default function AddMeetingScreen({ navigation }) {
-  const { addMeeting, workspace } = useAppContext();
+  const { workspace, addMeeting, inviteMember, searchUsers } = useAppContext();
   const [meetingName, setMeetingName] = useState('');
-  const [participantInput, setParticipantInput] = useState('');
-  const [participants, setParticipants] = useState(workspace?.members?.map((m) => m.name) || []);
+  const [inviteInput, setInviteInput] = useState('');
+  const [inviteEmails, setInviteEmails] = useState([]);
+  const [inviteResults, setInviteResults] = useState([]);
+  const [isSearchingUsers, setIsSearchingUsers] = useState(false);
   const [description, setDescription] = useState('');
   const [focusedField, setFocusedField] = useState(null);
-  const addParticipant = () => { const name = participantInput.trim(); if (!name) return; if (participants.includes(name)) return Alert.alert('중복', '이미 추가된 참여자입니다.'); setParticipants((prev) => [...prev, name]); setParticipantInput(''); };
-  const create = async () => { if (!meetingName.trim()) return Alert.alert('입력 오류', '회의 이름을 입력해주세요.'); if (!participants.length) return Alert.alert('입력 오류', '참여자를 추가해주세요.'); const meeting = await addMeeting({ name: meetingName.trim(), participants, description: description.trim() }); navigation.replace('MeetingDetail', { meetingId: meeting.id, meetingName: meeting.name }); };
+  const [isCreating, setIsCreating] = useState(false);
+
+  useEffect(() => {
+    const keyword = inviteInput.trim();
+    if (keyword.length < 2) {
+      setInviteResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchingUsers(true);
+      try {
+        setInviteResults(await searchUsers(keyword));
+      } catch {
+        setInviteResults([]);
+      } finally {
+        setIsSearchingUsers(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [inviteInput, searchUsers]);
+
+  const addInviteUser = (user) => {
+    const email = (user.email || '').trim().toLowerCase();
+    if (!email) return Alert.alert('사용자 선택', '이메일이 있는 사용자를 선택해주세요.');
+    if (inviteEmails.includes(email)) return Alert.alert('중복', '이미 추가된 이메일입니다.');
+    setInviteEmails((prev) => [...prev, email]);
+    setInviteInput('');
+    setInviteResults([]);
+  };
+
+  const addInviteEmail = () => {
+    if (inviteResults.length === 1) {
+      addInviteUser(inviteResults[0]);
+      return;
+    }
+    Alert.alert('사용자 선택', '검색 결과에서 초대할 사용자를 선택해주세요.');
+  };
+
+  const create = async () => {
+    if (!workspace?.id) return Alert.alert('워크스페이스 선택', '회의를 만들 워크스페이스를 먼저 선택해주세요.');
+    if (!meetingName.trim()) return Alert.alert('입력 오류', '회의 이름을 입력해주세요.');
+
+    try {
+      setIsCreating(true);
+      const meeting = await addMeeting({
+        name: meetingName.trim(),
+        participants: inviteEmails,
+        description: description.trim(),
+      });
+
+      if (inviteEmails.length > 0) {
+        const results = await Promise.allSettled(inviteEmails.map((email) => inviteMember(email)));
+        const failedCount = results.filter((result) => result.status === 'rejected').length;
+        if (failedCount > 0) {
+          Alert.alert('회의 생성 완료', `${inviteEmails.length - failedCount}명에게 워크스페이스 초대를 보냈고, ${failedCount}명 초대는 실패했습니다.`);
+        } else {
+          Alert.alert('회의 생성 완료', '워크스페이스 초대 이메일을 보냈습니다.');
+        }
+      }
+
+      navigation.replace('MeetingDetail', { meetingId: meeting.id, meetingName: meeting.name });
+    } catch (error) {
+      Alert.alert('회의 생성 실패', error?.message || '회의를 만들지 못했습니다.');
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['bottom']}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-          <View style={styles.section}><Text style={styles.label}>회의 이름 <Text style={styles.required}>*</Text></Text><View style={[styles.inputWrap, focusedField === 'name' && styles.inputFocused]}><Ionicons name="mic-outline" size={18} color={COLORS.subtext} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="예: 주간 스탠드업" placeholderTextColor="#A0AEC0" value={meetingName} onChangeText={setMeetingName} maxLength={50} onFocus={() => setFocusedField('name')} onBlur={() => setFocusedField(null)} /><Text style={styles.charCount}>{meetingName.length}/50</Text></View></View>
-          <View style={styles.section}><Text style={styles.label}>참여자 <Text style={styles.required}>*</Text></Text><View style={styles.participantInputRow}><View style={[styles.inputWrap, styles.participantInputWrap, focusedField === 'participant' && styles.inputFocused]}><Ionicons name="person-add-outline" size={18} color={COLORS.subtext} style={styles.inputIcon} /><TextInput style={styles.input} placeholder="이름 입력 후 추가" placeholderTextColor="#A0AEC0" value={participantInput} onChangeText={setParticipantInput} onSubmitEditing={addParticipant} onFocus={() => setFocusedField('participant')} onBlur={() => setFocusedField(null)} /></View><TouchableOpacity style={[styles.addParticipantBtn, !participantInput.trim() && styles.addBtnDisabled]} onPress={addParticipant} disabled={!participantInput.trim()}><Ionicons name="add" size={22} color="#FFFFFF" /></TouchableOpacity></View><View style={styles.participantTags}>{participants.map((name) => <View key={name} style={styles.participantTag}><View style={styles.participantAvatar}><Text style={styles.participantAvatarText}>{name.charAt(0)}</Text></View><Text style={styles.participantTagText}>{name}</Text><TouchableOpacity onPress={() => setParticipants((prev) => prev.filter((item) => item !== name))} style={styles.participantRemoveBtn}><Ionicons name="close" size={13} color={COLORS.subtext} /></TouchableOpacity></View>)}</View></View>
-          <View style={styles.section}><Text style={styles.label}>회의 설명 <Text style={styles.optional}>(선택)</Text></Text><View style={[styles.inputWrap, styles.textareaWrap, focusedField === 'desc' && styles.inputFocused]}><TextInput style={[styles.input, styles.textarea]} placeholder="회의 목적이나 안건을 입력해주세요" placeholderTextColor="#A0AEC0" value={description} onChangeText={setDescription} multiline maxLength={200} textAlignVertical="top" onFocus={() => setFocusedField('desc')} onBlur={() => setFocusedField(null)} /></View><Text style={styles.charCountRight}>{description.length}/200</Text></View>
-          <TouchableOpacity style={[styles.createBtn, (!meetingName.trim() || participants.length === 0) && styles.createBtnDisabled]} onPress={create} disabled={!meetingName.trim() || participants.length === 0} activeOpacity={0.88}><Ionicons name="add-circle-outline" size={20} color="#FFFFFF" style={{ marginRight: 8 }} /><Text style={styles.createBtnText}>회의 만들기</Text></TouchableOpacity>
+          <View style={styles.workspaceNotice}>
+            <View style={styles.workspaceNoticeIcon}><Ionicons name="business-outline" size={18} color={COLORS.primary} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.workspaceNoticeLabel}>생성 위치</Text>
+              <Text style={styles.workspaceNoticeName}>{workspace?.name || '워크스페이스를 먼저 선택해주세요'}</Text>
+            </View>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.label}>회의 이름 <Text style={styles.required}>*</Text></Text>
+            <View style={[styles.inputWrap, focusedField === 'name' && styles.inputFocused]}>
+              <Ionicons name="mic-outline" size={18} color={COLORS.subtext} style={styles.inputIcon} />
+              <TextInput style={styles.input} placeholder="예: 주간 스탠드업" placeholderTextColor="#A0AEC0" value={meetingName} onChangeText={setMeetingName} maxLength={50} onFocus={() => setFocusedField('name')} onBlur={() => setFocusedField(null)} />
+              <Text style={styles.charCount}>{meetingName.length}/50</Text>
+            </View>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.label}>워크스페이스 초대 사용자 <Text style={styles.optional}>(선택)</Text></Text>
+            <View style={styles.participantInputRow}>
+              <View style={[styles.inputWrap, styles.participantInputWrap, focusedField === 'invite' && styles.inputFocused]}>
+                <Ionicons name="mail-outline" size={18} color={COLORS.subtext} style={styles.inputIcon} />
+                <TextInput style={styles.input} placeholder="이름 또는 이메일 검색 후 선택" placeholderTextColor="#A0AEC0" value={inviteInput} onChangeText={setInviteInput} onSubmitEditing={addInviteEmail} autoCapitalize="none" onFocus={() => setFocusedField('invite')} onBlur={() => setFocusedField(null)} />
+                {isSearchingUsers ? <ActivityIndicator size="small" color={COLORS.primary} /> : null}
+              </View>
+              <TouchableOpacity style={[styles.addParticipantBtn, !inviteInput.trim() && styles.addBtnDisabled]} onPress={addInviteEmail} disabled={!inviteInput.trim()}>
+                <Ionicons name="add" size={22} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.helperText}>초대받은 사용자가 로그인 후 수락하면 이 워크스페이스의 회의 목록을 볼 수 있습니다.</Text>
+            {inviteResults.length > 0 ? (
+              <View style={styles.userResults}>
+                {inviteResults.map((user) => (
+                  <TouchableOpacity key={user.email || user.id} style={styles.userResultRow} onPress={() => addInviteUser(user)}>
+                    <View style={styles.userResultAvatar}><Text style={styles.userResultAvatarText}>{(user.name || user.email || '?').charAt(0)}</Text></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.userResultName}>{user.name || '이름 없음'}</Text>
+                      <Text style={styles.userResultEmail}>{user.email}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+            <View style={styles.participantTags}>
+              {inviteEmails.map((email) => (
+                <View key={email} style={styles.participantTag}>
+                  <View style={styles.participantAvatar}><Text style={styles.participantAvatarText}>{email.charAt(0).toUpperCase()}</Text></View>
+                  <Text style={styles.participantTagText}>{email}</Text>
+                  <TouchableOpacity onPress={() => setInviteEmails((prev) => prev.filter((item) => item !== email))} style={styles.participantRemoveBtn}>
+                    <Ionicons name="close" size={13} color={COLORS.subtext} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.label}>회의 설명 <Text style={styles.optional}>(선택)</Text></Text>
+            <View style={[styles.inputWrap, styles.textareaWrap, focusedField === 'desc' && styles.inputFocused]}>
+              <TextInput style={[styles.input, styles.textarea]} placeholder="회의 목적이나 안건을 입력해주세요" placeholderTextColor="#A0AEC0" value={description} onChangeText={setDescription} multiline maxLength={200} textAlignVertical="top" onFocus={() => setFocusedField('desc')} onBlur={() => setFocusedField(null)} />
+            </View>
+            <Text style={styles.charCountRight}>{description.length}/200</Text>
+          </View>
+
+          <TouchableOpacity style={[styles.createBtn, (!workspace?.id || !meetingName.trim() || isCreating) && styles.createBtnDisabled]} onPress={create} disabled={!workspace?.id || !meetingName.trim() || isCreating} activeOpacity={0.88}>
+            <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+            <Text style={styles.createBtnText}>{isCreating ? '회의 만드는 중' : '회의 만들기'}</Text>
+          </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
-const styles = StyleSheet.create({ safeArea: { flex: 1, backgroundColor: COLORS.background }, flex: { flex: 1 }, scrollContent: { padding: 20, paddingBottom: 40 }, section: { marginBottom: 24 }, label: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 8 }, required: { color: COLORS.error }, optional: { color: COLORS.subtext, fontWeight: '400', fontSize: 12 }, inputWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.inputBg, borderRadius: 12, borderWidth: 1.5, borderColor: 'transparent', paddingHorizontal: 12, height: 50 }, inputFocused: { borderColor: COLORS.primary, backgroundColor: '#EEF2FF' }, inputIcon: { marginRight: 10 }, input: { flex: 1, fontSize: 15, color: COLORS.text }, charCount: { fontSize: 11, color: COLORS.subtext }, participantInputRow: { flexDirection: 'row', gap: 8 }, participantInputWrap: { flex: 1 }, addParticipantBtn: { width: 50, height: 50, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' }, addBtnDisabled: { opacity: 0.4 }, participantTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }, participantTag: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 10, paddingVertical: 5, paddingLeft: 6, paddingRight: 8, borderWidth: 1, borderColor: COLORS.border, gap: 6 }, participantAvatar: { width: 24, height: 24, borderRadius: 7, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' }, participantAvatarText: { fontSize: 11, fontWeight: '700', color: COLORS.primary }, participantTagText: { fontSize: 13, color: COLORS.text, fontWeight: '500' }, participantRemoveBtn: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' }, textareaWrap: { height: 100, alignItems: 'flex-start', paddingTop: 12 }, textarea: { height: 80 }, charCountRight: { textAlign: 'right', fontSize: 11, color: COLORS.subtext, marginTop: 4 }, createBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: 16, height: 56, shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 8, marginTop: 8 }, createBtnDisabled: { opacity: 0.5, shadowOpacity: 0 }, createBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700', letterSpacing: 0 } });
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: COLORS.background },
+  flex: { flex: 1 },
+  scrollContent: { padding: 20, paddingBottom: 40 },
+  workspaceNotice: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: COLORS.border },
+  workspaceNoticeIcon: { width: 38, height: 38, borderRadius: 10, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  workspaceNoticeLabel: { fontSize: 11, fontWeight: '700', color: COLORS.primary, marginBottom: 2 },
+  workspaceNoticeName: { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  section: { marginBottom: 24 },
+  label: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
+  required: { color: COLORS.error },
+  optional: { color: COLORS.subtext, fontWeight: '400', fontSize: 12 },
+  inputWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.inputBg, borderRadius: 12, borderWidth: 1.5, borderColor: 'transparent', paddingHorizontal: 12, height: 50 },
+  inputFocused: { borderColor: COLORS.primary, backgroundColor: '#EEF2FF' },
+  inputIcon: { marginRight: 10 },
+  input: { flex: 1, fontSize: 15, color: COLORS.text },
+  charCount: { fontSize: 11, color: COLORS.subtext },
+  helperText: { fontSize: 12, color: COLORS.subtext, lineHeight: 18, marginTop: 8 },
+  participantInputRow: { flexDirection: 'row', gap: 8 },
+  participantInputWrap: { flex: 1 },
+  addParticipantBtn: { width: 50, height: 50, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
+  addBtnDisabled: { opacity: 0.4 },
+  userResults: { borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, backgroundColor: COLORS.surface, overflow: 'hidden', marginTop: 10 },
+  userResultRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  userResultAvatar: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  userResultAvatarText: { color: COLORS.primary, fontWeight: '700' },
+  userResultName: { color: COLORS.text, fontWeight: '700', fontSize: 13 },
+  userResultEmail: { color: COLORS.subtext, fontSize: 12, marginTop: 1 },
+  participantTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  participantTag: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 10, paddingVertical: 5, paddingLeft: 6, paddingRight: 8, borderWidth: 1, borderColor: COLORS.border, gap: 6 },
+  participantAvatar: { width: 24, height: 24, borderRadius: 7, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  participantAvatarText: { fontSize: 11, fontWeight: '700', color: COLORS.primary },
+  participantTagText: { fontSize: 13, color: COLORS.text, fontWeight: '500' },
+  participantRemoveBtn: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  textareaWrap: { height: 100, alignItems: 'flex-start', paddingTop: 12 },
+  textarea: { height: 80 },
+  charCountRight: { textAlign: 'right', fontSize: 11, color: COLORS.subtext, marginTop: 4 },
+  createBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: 16, height: 56, shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 8, marginTop: 8 },
+  createBtnDisabled: { opacity: 0.5, shadowOpacity: 0 },
+  createBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700', letterSpacing: 0 },
+});

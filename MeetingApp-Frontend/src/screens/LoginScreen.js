@@ -8,17 +8,28 @@ import { COLORS } from '../theme';
 export default function LoginScreen() {
   const { login, register } = useAppContext();
   const [isRegisterMode, setIsRegisterMode] = useState(false);
-  const [email, setEmail] = useState('you@capstone.dev');
-  const [password, setPassword] = useState('password123');
-  const [displayName, setDisplayName] = useState('최유진');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
 
   const handleSubmit = async () => {
+    const trimmedEmail = email.trim();
+    const trimmedName = displayName.trim();
+    if (!trimmedEmail || !password) {
+      Alert.alert('입력 오류', '이메일과 비밀번호를 입력해주세요.');
+      return;
+    }
+    if (isRegisterMode && !trimmedName) {
+      Alert.alert('입력 오류', '회원가입할 이름을 입력해주세요.');
+      return;
+    }
+
     setIsLoading(true);
     try {
-      const payload = { email, password, name: displayName || email.split('@')[0] };
+      const payload = { email: trimmedEmail, password, name: trimmedName };
       if (isRegisterMode) {
         await register(payload);
         setIsRegisterMode(false);
@@ -60,7 +71,7 @@ export default function LoginScreen() {
               <TextInput style={styles.input} placeholder="비밀번호 입력" placeholderTextColor="#A0AEC0" value={password} onChangeText={setPassword} secureTextEntry={!showPassword} onFocus={() => setFocusedField('password')} onBlur={() => setFocusedField(null)} />
               <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}><Ionicons name={showPassword ? 'eye-outline' : 'eye-off-outline'} size={18} color={COLORS.subtext} /></TouchableOpacity>
             </Field>
-            <TouchableOpacity style={[styles.loginButton, isLoading && styles.loginButtonDisabled]} onPress={handleSubmit} activeOpacity={0.85}>
+            <TouchableOpacity style={[styles.loginButton, isLoading && styles.loginButtonDisabled]} onPress={handleSubmit} activeOpacity={0.85} disabled={isLoading}>
               {isLoading ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.loginButtonText}>{isRegisterMode ? '회원가입' : '로그인'}</Text>}
             </TouchableOpacity>
             <Text style={styles.helperText}>이메일로 바로 시작할 수 있습니다.</Text>
@@ -116,4 +127,3 @@ const styles = StyleSheet.create({
   signupPrompt: { color: COLORS.subtext, fontSize: 14 },
   signupLink: { color: COLORS.primary, fontSize: 14, fontWeight: '700' },
 });
-
