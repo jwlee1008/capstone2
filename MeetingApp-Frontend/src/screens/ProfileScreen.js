@@ -159,12 +159,6 @@ export default function MyInfoScreen() {
           <SettingRow icon="trash-outline" iconBg="#FEF2F2" iconColor={COLORS.error} label="회원 탈퇴" onPress={handleDeleteAccount} danger />
         </SectionCard>
 
-        <SectionCard title="서비스 설정">
-          <SettingRow icon="cloud-upload-outline" iconBg="#EEF2FF" iconColor={COLORS.primary} label="녹음 파일 처리 상태 알림" hasArrow={false} />
-          <View style={styles.rowDivider} />
-          <SettingRow icon="calendar-outline" iconBg="#EEF2FF" iconColor={COLORS.primary} label="캘린더 내보내기 관리" hasArrow={false} />
-        </SectionCard>
-
         <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.85}>
           <Ionicons name="log-out-outline" size={18} color={COLORS.error} />
           <Text style={styles.logoutText}>로그아웃</Text>
