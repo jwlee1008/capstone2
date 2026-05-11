@@ -221,7 +221,7 @@ export function AppProvider({ children }) {
   const [calendarTasks, setCalendarTasks] = useState([]);
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [taskStats, setTaskStats] = useState({ total: 0, todo: 0, inProgress: 0, done: 0 });
-  const [notionConnected, setNotionConnected] = useState(false);
+  const [calendarExported, setCalendarExported] = useState(false);
   const [isApiMode, setIsApiMode] = useState(false);
   const [isRestoringSession, setIsRestoringSession] = useState(true);
 
@@ -234,7 +234,7 @@ export function AppProvider({ children }) {
     setCalendarTasks([]);
     setCalendarEvents([]);
     setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
-    setNotionConnected(false);
+    setCalendarExported(false);
     setIsApiMode(false);
   };
 
@@ -602,7 +602,7 @@ export function AppProvider({ children }) {
   const syncNotionCalendar = async () => {
     if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
     await api.syncWorkspaceToNotion(workspace.id);
-    setNotionConnected(true);
+    setCalendarExported(true);
   };
 
   const value = useMemo(() => ({
@@ -614,7 +614,7 @@ export function AppProvider({ children }) {
     calendarTasks,
     calendarEvents,
     taskStats,
-    notionConnected,
+    calendarExported,
     isApiMode,
     isRestoringSession,
     login,
@@ -640,10 +640,10 @@ export function AppProvider({ children }) {
     deleteCalendarTask,
     addCalendarEvent,
     deleteCalendarEvent,
-    setNotionConnected,
+    setCalendarExported,
     syncNotionCalendar,
     getMeetingById,
-  }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, notionConnected, isApiMode, isRestoringSession]);
+  }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, calendarExported, isApiMode, isRestoringSession]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
