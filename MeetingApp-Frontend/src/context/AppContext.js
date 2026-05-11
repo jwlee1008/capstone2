@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { api, setAuthExpiredHandler } from '../services/api';
+import { api, restoreTokens, setAuthExpiredHandler } from '../services/api';
 
 const AppContext = createContext(null);
 
@@ -196,6 +196,7 @@ export function AppProvider({ children }) {
   const [taskStats, setTaskStats] = useState({ total: 0, todo: 0, inProgress: 0, done: 0 });
   const [notionConnected, setNotionConnected] = useState(false);
   const [isApiMode, setIsApiMode] = useState(false);
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
 
   const resetAppState = () => {
     setUser(null);
@@ -224,7 +225,7 @@ export function AppProvider({ children }) {
     return mapped;
   };
 
-  const loadWorkspaceBundle = async (targetWorkspace = null) => {
+  const loadWorkspaceBundle = async (targetWorkspace = null, fallbackUser = user) => {
     const backendWorkspaces = normalizeList(await api.getWorkspaces().catch(() => []));
     const explicitTarget = typeof targetWorkspace === 'object' ? targetWorkspace : null;
     const targetId = explicitTarget ? getWorkspaceId(explicitTarget) : targetWorkspace;
@@ -253,8 +254,8 @@ export function AppProvider({ children }) {
     } catch (error) {
       console.error('[workspace] failed to load members', selectedId, error);
       const mappedSelected = mapWorkspace(selected);
-      if (user && (!mappedSelected.ownerId || String(mappedSelected.ownerId) === String(user.id))) {
-        members = [mapMember({ ...user, role: 'owner' })];
+      if (fallbackUser && (!mappedSelected.ownerId || String(mappedSelected.ownerId) === String(fallbackUser.id))) {
+        members = [mapMember({ ...fallbackUser, role: 'owner' })];
       }
     }
     const mappedWorkspace = mapWorkspace(selected, members);
@@ -273,26 +274,63 @@ export function AppProvider({ children }) {
     return mappedWorkspace;
   };
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const restoreSession = async () => {
+      const tokens = restoreTokens();
+      if (!tokens.accessToken && !tokens.refreshToken) {
+        if (isMounted) setIsRestoringSession(false);
+        return;
+      }
+
+      try {
+        setIsApiMode(true);
+        const profile = await api.getProfile();
+        if (!isMounted) return;
+        const restoredUser = mapUser(profile);
+        setUser(restoredUser);
+        await loadWorkspaceBundle(null, restoredUser).catch(() => {
+          setWorkspace(null);
+          setWorkspaces([]);
+          setInvitations([]);
+          setMeetings([]);
+          setCalendarTasks([]);
+          setCalendarEvents([]);
+          setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+        });
+      } catch {
+        if (isMounted) resetAppState();
+      } finally {
+        if (isMounted) setIsRestoringSession(false);
+      }
+    };
+
+    restoreSession();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const login = async ({ email, password, name }) => {
     try {
       const data = await api.login(email, password);
       setIsApiMode(true);
       const profile = await api.getProfile().catch(() => null);
-      setUser(mapUser(profile, { ...data, email, name: data?.name || name }));
+      const loggedInUser = mapUser(profile, { ...data, email, name: data?.name || name });
+      setUser(loggedInUser);
+      await loadWorkspaceBundle(null, loggedInUser).catch(() => {
+        setWorkspace(null);
+        setWorkspaces([]);
+        setInvitations([]);
+        setMeetings([]);
+        setCalendarTasks([]);
+        setCalendarEvents([]);
+        setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+      });
     } catch (error) {
       resetAppState();
       throw error;
-    }
-
-    try {
-      await loadWorkspaceBundle();
-    } catch {
-      setWorkspace(null);
-      setWorkspaces([]);
-      setInvitations([]);
-      setMeetings([]);
-      setCalendarTasks([]);
-      setCalendarEvents([]);
     }
   };
 
@@ -522,6 +560,7 @@ export function AppProvider({ children }) {
     taskStats,
     notionConnected,
     isApiMode,
+    isRestoringSession,
     login,
     register,
     logout,
@@ -548,7 +587,7 @@ export function AppProvider({ children }) {
     setNotionConnected,
     syncNotionCalendar,
     getMeetingById,
-  }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, notionConnected, isApiMode]);
+  }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, notionConnected, isApiMode, isRestoringSession]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
