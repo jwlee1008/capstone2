@@ -278,10 +278,10 @@ export const api = {
     return request(`/api/meetings${query}`);
   },
 
-  createMeeting({ workspaceId, title }) {
+  createMeeting({ workspaceId, title, description }) {
     return request('/api/meetings', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId, title }),
+      body: JSON.stringify({ workspaceId, title, description }),
     });
   },
 

@@ -452,7 +452,11 @@ export function AppProvider({ children }) {
 
   const addMeeting = async (meetingData) => {
     if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
-    const created = await api.createMeeting({ workspaceId: workspace.id, title: meetingData.name });
+    const created = await api.createMeeting({
+      workspaceId: workspace.id,
+      title: meetingData.name,
+      description: meetingData.description,
+    });
     const mapped = mapMeeting(created, workspace.members || []);
     setMeetings((prev) => [mapped, ...prev]);
     return mapped;
