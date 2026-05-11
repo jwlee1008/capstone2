@@ -1,9 +1,12 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const expoPort = Number(process.env.EXPO_PORT || 8081);
 const proxyPort = Number(process.env.PROXY_PORT || 3000);
 const backendOrigin = process.env.BACKEND_ORIGIN || 'http://localhost:8080';
+const compatRequire = fileURLToPath(new URL('./node-compat.cjs', import.meta.url));
+const nodeOptions = [process.env.NODE_OPTIONS, `--require=${compatRequire}`].filter(Boolean).join(' ');
 
 const expo = spawn('npx', ['expo', 'start', '--web', '--port', String(expoPort)], {
   stdio: 'inherit',
@@ -11,6 +14,7 @@ const expo = spawn('npx', ['expo', 'start', '--web', '--port', String(expoPort)]
   env: {
     ...process.env,
     EXPO_PUBLIC_API_BASE_URL: 'same-origin',
+    NODE_OPTIONS: nodeOptions,
   },
 });
 

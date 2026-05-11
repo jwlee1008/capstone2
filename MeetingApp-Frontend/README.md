@@ -9,6 +9,8 @@ npm install
 npm run web
 ```
 
+웹 실행은 `http://localhost:3000` 프록시로 열립니다. 프록시가 `/api` 요청을 백엔드 `http://localhost:8080`으로 넘겨서 로컬 CORS 문제를 피합니다.
+
 또는 Expo Go로 확인하려면:
 
 ```bash
