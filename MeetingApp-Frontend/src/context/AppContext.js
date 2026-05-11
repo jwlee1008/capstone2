@@ -505,15 +505,20 @@ export function AppProvider({ children }) {
     return transcribe;
   };
 
-  const updateSpeakerName = async (meetingId, sessionId, speakerKey, name) => {
+  const updateSpeakerName = async (meetingId, sessionId, speakerKey, speaker) => {
     const meeting = getMeetingById(meetingId);
     const session = meeting?.sessions?.find((item) => String(item.id) === String(sessionId)) || meeting?.sessions?.[0];
-    const nextMap = { ...(session?.speakerMap || {}), [speakerKey]: name };
+    const selectedSpeaker = typeof speaker === 'string' ? { name: speaker } : speaker || {};
+    const selectedName = selectedSpeaker.name || selectedSpeaker.userName || selectedSpeaker.email || `화자${speakerKey}`;
+    const selectedUserId = selectedSpeaker.userId || selectedSpeaker.id || null;
+    const nextMap = { ...(session?.speakerMap || {}), [speakerKey]: selectedName };
 
     if (session?.transcriptId) {
       const mappings = Object.entries(nextMap).map(([key, userName]) => {
         const segment = session.transcript.find((item) => item.speakerKey === key);
-        const member = workspace?.members?.find((item) => item.name === userName);
+        const member = String(key) === String(speakerKey) && selectedUserId
+          ? { userId: selectedUserId }
+          : workspace?.members?.find((item) => item.name === userName);
         return {
           speakerLabel: segment?.speakerLabel || `SPEAKER_${key}`,
           userName,
