@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Alert, Image, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -64,6 +64,7 @@ export default function MyInfoScreen() {
       Alert.alert('저장 완료', '프로필이 업데이트되었습니다.');
     } catch (error) {
       Alert.alert('저장 실패', error?.message || '프로필을 업데이트하지 못했습니다.');
+      throw error;
     }
   };
 
@@ -189,6 +190,27 @@ function Stat({ value, label }) {
 function EditProfileModal({ visible, user, onClose, onSave }) {
   const [name, setName] = useState(user?.name || '');
   const [role, setRole] = useState(user?.role || '');
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    setName(user?.name || '');
+    setRole(user?.role || '');
+  }, [visible, user?.name, user?.role]);
+
+  const handleSave = async () => {
+    if (!name.trim() || isSaving) return;
+    try {
+      setIsSaving(true);
+      await onSave({ name: name.trim(), role: role.trim() });
+      onClose();
+    } catch {
+      // Failure alert is handled by the parent so the modal can stay open.
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={onClose}>
@@ -215,11 +237,11 @@ function EditProfileModal({ visible, user, onClose, onSave }) {
           <View style={styles.editModalBtns}>
             <TouchableOpacity style={styles.editCancelBtn} onPress={onClose}><Text style={styles.editCancelText}>취소</Text></TouchableOpacity>
             <TouchableOpacity
-              style={[styles.editConfirmBtn, !name.trim() && styles.editConfirmDisabled]}
-              onPress={() => { if (!name.trim()) return; onSave({ name: name.trim(), role: role.trim() }); onClose(); }}
-              disabled={!name.trim()}
+              style={[styles.editConfirmBtn, (!name.trim() || isSaving) && styles.editConfirmDisabled]}
+              onPress={handleSave}
+              disabled={!name.trim() || isSaving}
             >
-              <Text style={styles.editConfirmText}>저장</Text>
+              <Text style={styles.editConfirmText}>{isSaving ? '저장 중' : '저장'}</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>

@@ -369,7 +369,7 @@ export function AppProvider({ children }) {
   };
 
   const updateUser = async (updates) => {
-    if (isApiMode && updates.name) await api.updateProfileName(updates.name).catch(() => null);
+    if (isApiMode && updates.name) await api.updateProfileName(updates.name);
     setUser((prev) => ({ ...prev, ...updates }));
   };
 
