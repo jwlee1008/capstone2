@@ -78,6 +78,14 @@ function secondsToTime(seconds = 0) {
   return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
+function getTranscriptId(transcript) {
+  return transcript?.id || transcript?.transcriptId;
+}
+
+function getSpeakerKey(label = 'SPEAKER_A') {
+  return String(label).replace('SPEAKER_', '');
+}
+
 function splitSummary(summary) {
   if (!summary) return [];
   return summary
@@ -88,7 +96,7 @@ function splitSummary(summary) {
 
 function mapTranscriptSegment(segment, index) {
   const label = segment.speakerLabel || segment.speakerKey || 'SPEAKER_A';
-  const speakerKey = label.replace('SPEAKER_', '');
+  const speakerKey = getSpeakerKey(label);
   return {
     id: `${label}-${segment.sequence ?? index}`,
     speakerKey,
@@ -142,18 +150,23 @@ function mapUser(raw, fallback = {}) {
   };
 }
 
-function buildSessionFromBackend({ transcript, summary, tasks = [], events = [], recordings = [] }) {
+function buildSessionFromBackend({ transcript, summary, tasks = [], events = [], recordings = [], speakerMappings = [] }) {
   if (!transcript && !summary && tasks.length === 0 && events.length === 0 && recordings.length === 0) return null;
   const recording = recordings[0];
   const segments = (transcript?.segments || []).map(mapTranscriptSegment);
   const speakerMap = {};
+  normalizeList(speakerMappings).forEach((mapping) => {
+    const label = mapping.speakerLabel || mapping.speakerKey;
+    const name = mapping.userName || mapping.speakerName || mapping.name;
+    if (label && name) speakerMap[getSpeakerKey(label)] = name;
+  });
   segments.forEach((segment) => {
-    if (segment.speakerName) speakerMap[segment.speakerKey] = segment.speakerName;
+    if (segment.speakerName && !speakerMap[segment.speakerKey]) speakerMap[segment.speakerKey] = segment.speakerName;
   });
 
   return {
-    id: transcript?.id || recording?.recordingId || `s${Date.now()}`,
-    transcriptId: transcript?.id,
+    id: getTranscriptId(transcript) || recording?.recordingId || `s${Date.now()}`,
+    transcriptId: getTranscriptId(transcript),
     recordingId: transcript?.recordingId || recording?.recordingId,
     startedAt: transcript?.createdAt || recording?.createdAt || new Date().toISOString(),
     duration: recording?.durationSec ? `${Math.round(recording.durationSec / 60)}분` : null,
@@ -368,8 +381,12 @@ export function AppProvider({ children }) {
       api.getEvents({ workspaceId: workspace?.id }).catch(() => []),
       api.getRecordings(meetingId).catch(() => []),
     ]);
+    const transcriptId = getTranscriptId(transcript);
+    const speakerMappings = transcriptId
+      ? await api.getSpeakerMappings(transcriptId).catch(() => [])
+      : [];
     const meetingEvents = events.filter((event) => !event.meetingId || String(event.meetingId) === String(meetingId));
-    const session = buildSessionFromBackend({ transcript, summary, tasks, events: meetingEvents, recordings });
+    const session = buildSessionFromBackend({ transcript, summary, tasks, events: meetingEvents, recordings, speakerMappings });
     setMeetings((prev) => prev.map((meeting) => (
       String(meeting.id) === String(meetingId)
         ? {
