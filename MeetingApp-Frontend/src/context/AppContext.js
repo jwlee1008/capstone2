@@ -56,6 +56,13 @@ function mapMember(raw) {
   };
 }
 
+function mapParticipants(raw) {
+  const participants = raw?.participants || raw?.participantNames || raw?.participantEmails || raw?.attendees || raw?.members;
+  return normalizeList(participants)
+    .map((item) => (typeof item === 'string' ? item : item.name || item.email || item.userName))
+    .filter(Boolean);
+}
+
 function mapMeeting(raw, members = []) {
   return {
     id: raw.id,
@@ -64,7 +71,7 @@ function mapMeeting(raw, members = []) {
     description: raw.description || '',
     createdAt: raw.createdAt || new Date().toISOString(),
     createdBy: raw.createdBy,
-    participants: members.map((member) => member.name),
+    participants: mapParticipants(raw),
     sessions: raw.sessions || [],
     taskCount: raw.taskCount || raw.savedTaskCount || 0,
     eventCount: raw.eventCount || raw.savedEventCount || 0,
@@ -469,7 +476,7 @@ export function AppProvider({ children }) {
     const speakerMappings = transcriptId
       ? await api.getSpeakerMappings(transcriptId).catch(() => [])
       : [];
-    const meetingEvents = events.filter((event) => !event.meetingId || String(event.meetingId) === String(meetingId));
+    const meetingEvents = events.filter((event) => String(event.meetingId) === String(meetingId));
     const session = buildSessionFromBackend({ transcript, summary, tasks, events: meetingEvents, recordings, speakerMappings });
     setMeetings((prev) => prev.map((meeting) => (
       String(meeting.id) === String(meetingId)
