@@ -53,6 +53,30 @@ export default function CalendarScreen() {
     }
   };
 
+  const handleUpdateTaskStatus = async (taskId, status) => {
+    try {
+      await updateCalendarTask(taskId, { status });
+    } catch (error) {
+      Alert.alert('변경 실패', error?.message || '할일 상태를 변경하지 못했습니다.');
+    }
+  };
+
+  const handleDeleteTask = async (taskId) => {
+    try {
+      await deleteCalendarTask(taskId);
+    } catch (error) {
+      Alert.alert('삭제 실패', error?.message || '할일을 삭제하지 못했습니다.');
+    }
+  };
+
+  const handleDeleteEvent = async (eventId) => {
+    try {
+      await deleteCalendarEvent(eventId);
+    } catch (error) {
+      Alert.alert('삭제 실패', error?.message || '일정을 삭제하지 못했습니다.');
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -80,13 +104,13 @@ export default function CalendarScreen() {
           <View key={event.id} style={styles.dayCard}>
             <View style={styles.eventRow}>
               <View style={{ flex: 1 }}><Text style={styles.taskTitle}>{event.title}</Text><Text style={styles.taskMeta}>{event.startAt || event.date} · 관련 할일 {event.relatedTasks?.length || 0}개</Text></View>
-              <TouchableOpacity style={styles.deleteBtn} onPress={() => deleteCalendarEvent(event.id)}><Ionicons name="trash-outline" size={14} color={COLORS.error} /></TouchableOpacity>
+              <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteEvent(event.id)}><Ionicons name="trash-outline" size={14} color={COLORS.error} /></TouchableOpacity>
             </View>
           </View>
         ))}
 
         <Text style={styles.sectionTitle}>등록된 할일</Text>
-        {calendarTasks.length === 0 ? <View style={styles.emptyCard}><Ionicons name="calendar-outline" size={54} color={COLORS.border} /><Text style={styles.emptyTitle}>등록된 할일이 없어요</Text><Text style={styles.emptyDesc}>회의 상세에서 제안된 할일을 검토하거나 직접 할일을 등록해보세요.</Text></View> : Object.entries(grouped).map(([date, tasks]) => <View key={date} style={styles.dayCard}><View style={styles.dayHeader}><Text style={styles.dayTitle}>{date}</Text><Text style={styles.dayCount}>{tasks.length}개</Text></View>{tasks.map((task) => <View key={task.id} style={styles.taskItem}><View style={styles.taskDot} /><View style={{ flex: 1 }}><Text style={styles.taskTitle}>{task.title}</Text><Text style={styles.taskMeta}>{task.assignee || '담당자 미정'} · {task.source}</Text><View style={styles.statusRow}>{STATUS_OPTIONS.map((option) => <TouchableOpacity key={option.code} style={[styles.statusBtn, task.statusCode === option.code && styles.statusBtnActive]} onPress={() => updateCalendarTask(task.id, { status: option.code })}><Text style={[styles.statusBtnText, task.statusCode === option.code && styles.statusBtnTextActive]}>{option.label}</Text></TouchableOpacity>)}</View></View><TouchableOpacity style={styles.deleteBtn} onPress={() => deleteCalendarTask(task.id)}><Ionicons name="trash-outline" size={14} color={COLORS.error} /></TouchableOpacity></View>)}</View>)}
+        {calendarTasks.length === 0 ? <View style={styles.emptyCard}><Ionicons name="calendar-outline" size={54} color={COLORS.border} /><Text style={styles.emptyTitle}>등록된 할일이 없어요</Text><Text style={styles.emptyDesc}>회의 상세에서 제안된 할일을 검토하거나 직접 할일을 등록해보세요.</Text></View> : Object.entries(grouped).map(([date, tasks]) => <View key={date} style={styles.dayCard}><View style={styles.dayHeader}><Text style={styles.dayTitle}>{date}</Text><Text style={styles.dayCount}>{tasks.length}개</Text></View>{tasks.map((task) => <View key={task.id} style={styles.taskItem}><View style={styles.taskDot} /><View style={{ flex: 1 }}><Text style={styles.taskTitle}>{task.title}</Text><Text style={styles.taskMeta}>{task.assignee || '담당자 미정'} · {task.source}</Text><View style={styles.statusRow}>{STATUS_OPTIONS.map((option) => <TouchableOpacity key={option.code} style={[styles.statusBtn, task.statusCode === option.code && styles.statusBtnActive]} onPress={() => handleUpdateTaskStatus(task.id, option.code)}><Text style={[styles.statusBtnText, task.statusCode === option.code && styles.statusBtnTextActive]}>{option.label}</Text></TouchableOpacity>)}</View></View><TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteTask(task.id)}><Ionicons name="trash-outline" size={14} color={COLORS.error} /></TouchableOpacity></View>)}</View>)}
       </ScrollView>
     </SafeAreaView>
   );

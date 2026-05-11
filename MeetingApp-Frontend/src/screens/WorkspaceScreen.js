@@ -1,5 +1,5 @@
 ﻿import React, { useState } from 'react';
-import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Screen from '../components/Screen';
 import Section from '../components/Section';
@@ -9,8 +9,38 @@ import { colors } from '../theme';
 
 export default function WorkspaceScreen() {
   const { workspace, createWorkspace, inviteMember } = useAppContext();
-  const [workspaceName, setWorkspaceName] = useState('프론트엔드 캡스톤 팀');
+  const [workspaceName, setWorkspaceName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleCreateWorkspace = async () => {
+    const name = workspaceName.trim();
+    if (!name) return Alert.alert('입력 오류', '워크스페이스 이름을 입력해주세요.');
+    try {
+      setIsSubmitting(true);
+      await createWorkspace(name);
+      setWorkspaceName('');
+    } catch (error) {
+      Alert.alert('생성 실패', error?.message || '워크스페이스를 만들지 못했습니다.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleInvite = async () => {
+    const email = inviteEmail.trim();
+    if (!email) return Alert.alert('입력 오류', '초대할 이메일을 입력해주세요.');
+    try {
+      setIsSubmitting(true);
+      await inviteMember(email);
+      setInviteEmail('');
+      Alert.alert('초대 완료', '가입된 이메일로 초대를 보냈습니다.');
+    } catch (error) {
+      Alert.alert('초대 실패', error?.message || '초대를 보내지 못했습니다.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   if (!workspace) {
     return (
@@ -19,8 +49,8 @@ export default function WorkspaceScreen() {
         <Text style={styles.title}>워크스페이스를 만들고 팀원을 초대하세요</Text>
         <Text style={styles.copy}>로그인한 팀 단위로 회의 녹음, 화자 매핑, 캘린더 할일을 관리합니다.</Text>
         <Section title="새 워크스페이스">
-          <TextInput value={workspaceName} onChangeText={setWorkspaceName} style={styles.input} />
-          <Button title="워크스페이스 생성" onPress={() => createWorkspace(workspaceName)} />
+          <TextInput value={workspaceName} onChangeText={setWorkspaceName} style={styles.input} placeholder="워크스페이스 이름" />
+          <Button title={isSubmitting ? '생성 중' : '워크스페이스 생성'} onPress={handleCreateWorkspace} loading={isSubmitting} disabled={isSubmitting} />
         </Section>
       </Screen>
     );
@@ -63,11 +93,9 @@ export default function WorkspaceScreen() {
             style={[styles.input, styles.inviteInput]}
           />
           <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => {
-              inviteMember(inviteEmail);
-              setInviteEmail('');
-            }}
+            style={[styles.iconButton, isSubmitting && styles.disabledButton]}
+            onPress={handleInvite}
+            disabled={isSubmitting}
           >
             <Ionicons name="send" size={19} color="#FFFFFF" />
           </TouchableOpacity>
@@ -171,6 +199,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  disabledButton: {
+    opacity: 0.6,
   },
   invited: {
     color: colors.muted,

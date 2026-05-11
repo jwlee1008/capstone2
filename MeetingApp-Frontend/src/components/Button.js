@@ -2,7 +2,7 @@ import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity } from 'react-native';
 import { colors } from '../theme';
 
-export default function Button({ title, onPress, variant = 'primary', icon, loading, style }) {
+export default function Button({ title, onPress, variant = 'primary', icon, loading, disabled, style }) {
   const isGhost = variant === 'ghost';
   const isLight = variant === 'light';
 
@@ -10,10 +10,12 @@ export default function Button({ title, onPress, variant = 'primary', icon, load
     <TouchableOpacity
       activeOpacity={0.82}
       onPress={onPress}
+      disabled={disabled || loading}
       style={[
         styles.button,
         isGhost && styles.ghost,
         isLight && styles.light,
+        (disabled || loading) && styles.disabled,
         style,
       ]}
     >
@@ -41,6 +43,9 @@ const styles = StyleSheet.create({
   },
   light: {
     backgroundColor: colors.chip,
+  },
+  disabled: {
+    opacity: 0.6,
   },
   text: {
     color: '#FFFFFF',

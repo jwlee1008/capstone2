@@ -1,5 +1,5 @@
 ﻿import React, { useState } from 'react';
-import { Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
@@ -12,7 +12,21 @@ export default function MyInfoScreen() {
   const { user, workspace, meetings, calendarTasks, logout, updateUser } = useAppContext();
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
   const totalSessions = meetings.reduce((acc, meeting) => acc + meeting.sessions.length, 0);
-  const handleLogout = () => Alert.alert('로그아웃', '정말 로그아웃 하시겠어요?', [{ text: '취소', style: 'cancel' }, { text: '로그아웃', style: 'destructive', onPress: logout }]);
+  const handleLogout = () => {
+    if (Platform.OS === 'web') {
+      if (window.confirm('정말 로그아웃 하시겠어요?')) logout();
+      return;
+    }
+    Alert.alert('로그아웃', '정말 로그아웃 하시겠어요?', [{ text: '취소', style: 'cancel' }, { text: '로그아웃', style: 'destructive', onPress: logout }]);
+  };
+  const handleSaveProfile = async (updates) => {
+    try {
+      await updateUser(updates);
+      Alert.alert('저장 완료', '프로필이 업데이트되었습니다.');
+    } catch (error) {
+      Alert.alert('저장 실패', error?.message || '프로필을 업데이트하지 못했습니다.');
+    }
+  };
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -22,7 +36,7 @@ export default function MyInfoScreen() {
         <SectionCard title="서비스 설정"><SettingRow icon="key-outline" iconBg="#EEF2FF" iconColor={COLORS.primary} label="계정 및 프로필 관리" hasArrow={false} /><View style={styles.rowDivider} /><SettingRow icon="cloud-upload-outline" iconBg="#EEF2FF" iconColor={COLORS.primary} label="녹음 파일 처리 상태 알림" hasArrow={false} /><View style={styles.rowDivider} /><SettingRow icon="calendar-outline" iconBg="#EEF2FF" iconColor={COLORS.primary} label="캘린더 내보내기 관리" hasArrow={false} /></SectionCard>
         <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.85}><Ionicons name="log-out-outline" size={18} color={COLORS.error} /><Text style={styles.logoutText}>로그아웃</Text></TouchableOpacity><Text style={styles.versionFooter}>MeetingApp v1.0.0</Text>
       </ScrollView>
-      <EditProfileModal visible={showEditProfileModal} user={user} onClose={() => setShowEditProfileModal(false)} onSave={(updates) => { updateUser(updates); Alert.alert('저장 완료', '프로필이 업데이트되었습니다.'); }} />
+      <EditProfileModal visible={showEditProfileModal} user={user} onClose={() => setShowEditProfileModal(false)} onSave={handleSaveProfile} />
     </SafeAreaView>
   );
 }

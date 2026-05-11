@@ -1,52 +1,34 @@
 import React, { createContext, useContext, useMemo, useState } from 'react';
 import { api } from '../services/api';
-import { suggestedTasks, summaryBullets, transcriptSegments, workspaceMembers } from '../data/mockData';
 
 const AppContext = createContext(null);
 
-function createDemoSession({ id = `s${Date.now()}`, fileName = 'planning-meeting.m4a', status = 'completed' } = {}) {
+function getWorkspaceId(raw) {
+  return raw?.id || raw?.workspaceId || raw?.workspace?.id;
+}
+
+function getWorkspaceName(raw, fallback = '') {
+  return raw?.name || raw?.workspaceName || raw?.workspace?.name || raw?.title || raw?.slug || fallback || '이름 없는 워크스페이스';
+}
+
+function normalizeList(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.content)) return data.content;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.items)) return data.items;
+  return [];
+}
+
+function mapWorkspace(raw, members = [], fallbackName = '') {
+  if (!raw) return null;
+  const id = getWorkspaceId(raw);
   return {
     id,
-    transcriptId: 'demo-transcript',
-    startedAt: new Date().toISOString(),
-    duration: '18분 24초',
-    status,
-    sourceType: 'upload',
-    fileName,
-    processStatus: status === 'completed' ? 'done' : 'processing',
-    speakerMap: status === 'completed' ? { A: '김민지', B: '이준호', C: '박서연' } : {},
-    summary: summaryBullets.join(' '),
-    summaryBullets,
-    keywords: ['회의요약', '할일', '캘린더'],
-    transcript: transcriptSegments,
-    tasks: suggestedTasks,
-    events: [],
-  };
-}
-
-function createDemoMeeting() {
-  return {
-    id: 'm1',
-    workspaceId: 'w1',
-    name: '캡스톤 서비스 기획 회의',
-    description: '회의 기록과 일정 등록 흐름 검토',
-    createdAt: '2026-05-09T01:20:00.000Z',
-    participants: workspaceMembers.map((member) => member.name),
-    sessions: [createDemoSession({ id: 's1' })],
-    taskCount: suggestedTasks.length,
-    eventCount: 0,
-  };
-}
-
-function mapWorkspace(raw, members = []) {
-  if (!raw) return null;
-  return {
-    id: raw.id,
-    name: raw.name,
-    slug: raw.slug,
-    ownerId: raw.ownerId,
-    ownerName: raw.ownerName,
-    createdAt: raw.createdAt,
+    name: getWorkspaceName(raw, fallbackName),
+    slug: raw.slug || raw.workspace?.slug,
+    ownerId: raw.ownerId || raw.owner?.id,
+    ownerName: raw.ownerName || raw.owner?.name,
+    createdAt: raw.createdAt || raw.workspace?.createdAt,
     members,
     invitedEmails: [],
   };
@@ -148,6 +130,18 @@ function mapEvent(raw) {
   };
 }
 
+function mapUser(raw, fallback = {}) {
+  return {
+    id: raw?.id || raw?.userId || fallback.id || fallback.userId,
+    userId: raw?.id || raw?.userId || fallback.id || fallback.userId,
+    email: raw?.email || fallback.email || '',
+    name: raw?.name || fallback.name || raw?.email || fallback.email || '사용자',
+    profileImg: raw?.profileImg || fallback.profileImg,
+    role: raw?.role || fallback.role || '서비스 운영',
+    status: raw?.status || fallback.status,
+  };
+}
+
 function buildSessionFromBackend({ transcript, summary, tasks = [], events = [], recordings = [] }) {
   if (!transcript && !summary && tasks.length === 0 && events.length === 0 && recordings.length === 0) return null;
   const recording = recordings[0];
@@ -190,75 +184,7 @@ export function AppProvider({ children }) {
   const [notionConnected, setNotionConnected] = useState(false);
   const [isApiMode, setIsApiMode] = useState(false);
 
-  const getMeetingById = (id) => meetings.find((meeting) => String(meeting.id) === String(id));
-
-  const loadInvitations = async () => {
-    if (!isApiMode) return invitations;
-    const rows = await api.getInvitations().catch(() => []);
-    const mapped = rows.filter((item) => (item.status || 'PENDING') === 'PENDING').map(mapInvitation);
-    setInvitations(mapped);
-    return mapped;
-  };
-
-  const loadWorkspaceBundle = async (targetWorkspace = null) => {
-    const backendWorkspaces = await api.getWorkspaces();
-    const mappedList = backendWorkspaces.map((item) => mapWorkspace(item));
-    const selected = targetWorkspace || backendWorkspaces?.[0] || null;
-    setWorkspaces(mappedList);
-    await loadInvitations();
-
-    if (!selected) {
-      setWorkspace(null);
-      setMeetings([]);
-      setCalendarTasks([]);
-      setCalendarEvents([]);
-      return;
-    }
-
-    const members = (await api.getWorkspaceMembers(selected.id)).map(mapMember);
-    const mappedWorkspace = mapWorkspace(selected, members);
-    const [backendMeetings, tasks, events, stats] = await Promise.all([
-      api.getMeetings(selected.id).catch(() => []),
-      api.getTasks({ workspaceId: selected.id }).catch(() => []),
-      api.getEvents({ workspaceId: selected.id }).catch(() => []),
-      api.getTaskStats({ workspaceId: selected.id }).catch(() => null),
-    ]);
-
-    setWorkspace(mappedWorkspace);
-    setMeetings(backendMeetings.map((meeting) => mapMeeting(meeting, members)));
-    setCalendarTasks(tasks.map(mapTask));
-    setCalendarEvents(events.map(mapEvent));
-    if (stats) setTaskStats(stats);
-  };
-
-  const login = async ({ email, password = 'password123', name }) => {
-    try {
-      const data = await api.login(email, password);
-      setIsApiMode(true);
-      setUser({ id: data.userId, email, name: data.name || name || email.split('@')[0], role: '서비스 운영' });
-      const backendWorkspaces = await api.getWorkspaces();
-      setWorkspaces(backendWorkspaces.map((item) => mapWorkspace(item)));
-      const rows = await api.getInvitations().catch(() => []);
-      setInvitations(rows.filter((item) => (item.status || 'PENDING') === 'PENDING').map(mapInvitation));
-      if (backendWorkspaces[0]) await loadWorkspaceBundle(backendWorkspaces[0]);
-    } catch {
-      setIsApiMode(false);
-      setUser({ id: 'me', email, name: name || email.split('@')[0], role: '서비스 운영' });
-      setWorkspaces([]);
-      setInvitations([]);
-    }
-  };
-
-  const register = async ({ email, password, name }) => {
-    try {
-      await api.register(email, password, name);
-    } catch {
-      throw new Error('회원가입에 실패했습니다.');
-    }
-  };
-
-  const logout = async () => {
-    if (isApiMode) await api.logout();
+  const resetAppState = () => {
     setUser(null);
     setWorkspace(null);
     setWorkspaces([]);
@@ -271,89 +197,164 @@ export function AppProvider({ children }) {
     setIsApiMode(false);
   };
 
+  const getMeetingById = (id) => meetings.find((meeting) => String(meeting.id) === String(id));
+
+  const loadInvitations = async () => {
+    const rows = await api.getInvitations().catch(() => []);
+    const mapped = rows.filter((item) => (item.status || 'PENDING') === 'PENDING').map(mapInvitation);
+    setInvitations(mapped);
+    return mapped;
+  };
+
+  const loadWorkspaceBundle = async (targetWorkspace = null) => {
+    const backendWorkspaces = normalizeList(await api.getWorkspaces().catch(() => []));
+    const explicitTarget = typeof targetWorkspace === 'object' ? targetWorkspace : null;
+    const targetId = explicitTarget ? getWorkspaceId(explicitTarget) : targetWorkspace;
+    const workspaceRows = explicitTarget && !backendWorkspaces.some((item) => String(getWorkspaceId(item)) === String(targetId))
+      ? [explicitTarget, ...backendWorkspaces]
+      : backendWorkspaces;
+    const mappedList = workspaceRows.map((item) => mapWorkspace(item)).filter((item) => item?.id);
+    const selected = targetId
+      ? workspaceRows.find((item) => String(getWorkspaceId(item)) === String(targetId)) || explicitTarget
+      : workspaceRows?.[0] || null;
+    setWorkspaces(mappedList);
+    await loadInvitations().catch(() => []);
+
+    const selectedId = getWorkspaceId(selected);
+    if (!selected || !selectedId) {
+      setWorkspace(null);
+      setMeetings([]);
+      setCalendarTasks([]);
+      setCalendarEvents([]);
+      return;
+    }
+
+    let members = [];
+    try {
+      members = normalizeList(await api.getWorkspaceMembers(selectedId)).map(mapMember);
+    } catch (error) {
+      console.error('[workspace] failed to load members', selectedId, error);
+      const mappedSelected = mapWorkspace(selected);
+      if (user && (!mappedSelected.ownerId || String(mappedSelected.ownerId) === String(user.id))) {
+        members = [mapMember({ ...user, role: 'owner' })];
+      }
+    }
+    const mappedWorkspace = mapWorkspace(selected, members);
+    const [backendMeetings, tasks, events, stats] = await Promise.all([
+      api.getMeetings(selectedId).then(normalizeList).catch(() => []),
+      api.getTasks({ workspaceId: selectedId }).then(normalizeList).catch(() => []),
+      api.getEvents({ workspaceId: selectedId }).then(normalizeList).catch(() => []),
+      api.getTaskStats({ workspaceId: selectedId }).catch(() => null),
+    ]);
+
+    setWorkspace(mappedWorkspace);
+    setMeetings(backendMeetings.map((meeting) => mapMeeting(meeting, members)));
+    setCalendarTasks(tasks.map(mapTask));
+    setCalendarEvents(events.map(mapEvent));
+    if (stats) setTaskStats(stats);
+    return mappedWorkspace;
+  };
+
+  const login = async ({ email, password, name }) => {
+    try {
+      const data = await api.login(email, password);
+      setIsApiMode(true);
+      const profile = await api.getProfile().catch(() => null);
+      setUser(mapUser(profile, { ...data, email, name: data?.name || name }));
+    } catch (error) {
+      resetAppState();
+      throw error;
+    }
+
+    try {
+      await loadWorkspaceBundle();
+    } catch {
+      setWorkspace(null);
+      setWorkspaces([]);
+      setInvitations([]);
+      setMeetings([]);
+      setCalendarTasks([]);
+      setCalendarEvents([]);
+    }
+  };
+
+  const register = async ({ email, password, name }) => {
+    try {
+      await api.register(email, password, name);
+    } catch {
+      throw new Error('회원가입에 실패했습니다.');
+    }
+  };
+
+  const logout = async () => {
+    if (isApiMode) await api.logout(user?.id).catch(() => {});
+    resetAppState();
+  };
+
   const updateUser = async (updates) => {
     if (isApiMode && updates.name) await api.updateProfileName(updates.name).catch(() => null);
     setUser((prev) => ({ ...prev, ...updates }));
   };
 
   const selectWorkspace = async (workspaceId) => {
-    if (isApiMode) {
-      const selected = workspaces.find((item) => String(item.id) === String(workspaceId));
-      await loadWorkspaceBundle(selected);
-      return;
-    }
-    if (!workspace) setWorkspace({ id: 'w1', name: '프론트엔드 캡스톤 팀', members: workspaceMembers, invitedEmails: [] });
+    const selected = workspaces.find((item) => String(item.id) === String(workspaceId));
+    if (!selected) throw new Error('워크스페이스를 찾을 수 없습니다.');
+    setWorkspace((prev) => (prev?.id === selected.id ? prev : mapWorkspace(selected, selected.members || [])));
+    await loadWorkspaceBundle(selected.id).catch(() => null);
   };
 
   const createWorkspace = async (name) => {
-    if (isApiMode) {
-      const created = await api.createWorkspace(name);
-      await loadWorkspaceBundle(created);
-      return created;
-    }
-
-    const nextWorkspace = {
-      id: 'w1',
-      name: name || '프론트엔드 캡스톤 팀',
-      members: workspaceMembers,
-      invitedEmails: ['designer@team.com'],
-    };
-    setWorkspace(nextWorkspace);
-    setWorkspaces([nextWorkspace]);
-    setMeetings([createDemoMeeting()]);
-    return nextWorkspace;
+    const created = await api.createWorkspace(name);
+    const ownerMember = user ? [mapMember({ ...user, role: 'owner' })] : [];
+    const mapped = mapWorkspace(created, ownerMember, name);
+    if (!mapped?.id) throw new Error('워크스페이스 생성 응답에 ID가 없습니다. 백엔드 응답을 확인해주세요.');
+    setWorkspace(mapped);
+    setWorkspaces((prev) => [mapped, ...prev.filter((item) => String(item.id) !== String(mapped.id))]);
+    setMeetings([]);
+    setCalendarTasks([]);
+    setCalendarEvents([]);
+    setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+    await loadWorkspaceBundle(created).catch(() => null);
+    return created;
   };
 
   const acceptInvitation = async (invitationId) => {
-    if (isApiMode) {
-      await api.acceptInvitation(invitationId);
-      await loadWorkspaceBundle();
-      return;
-    }
+    const accepted = invitations.find((item) => String(item.id) === String(invitationId));
+    await api.acceptInvitation(invitationId);
+    await loadWorkspaceBundle(accepted?.workspaceId).catch(() => null);
     setInvitations((prev) => prev.filter((item) => String(item.id) !== String(invitationId)));
   };
 
   const declineInvitation = async (invitationId) => {
-    if (isApiMode) await api.declineInvitation(invitationId);
+    await api.declineInvitation(invitationId);
     setInvitations((prev) => prev.filter((item) => String(item.id) !== String(invitationId)));
   };
 
   const inviteMember = async (email) => {
     if (!email.trim()) return;
-    if (isApiMode && workspace?.id) await api.inviteMember(workspace.id, email.trim());
-    setWorkspace((prev) => ({ ...prev, invitedEmails: [...(prev?.invitedEmails || []), email.trim()] }));
+    if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
+    const normalizedEmail = email.trim().toLowerCase();
+    await api.inviteMember(workspace.id, normalizedEmail);
+    setWorkspace((prev) => ({
+      ...prev,
+      invitedEmails: Array.from(new Set([...(prev?.invitedEmails || []), normalizedEmail])),
+    }));
   };
 
   const addMeeting = async (meetingData) => {
-    if (isApiMode && workspace?.id) {
-      const created = await api.createMeeting({ workspaceId: workspace.id, title: meetingData.name });
-      const mapped = mapMeeting(created, workspace.members || []);
-      setMeetings((prev) => [mapped, ...prev]);
-      return mapped;
-    }
-
-    const meeting = {
-      id: `m${Date.now()}`,
-      workspaceId: workspace?.id,
-      name: meetingData.name,
-      description: meetingData.description,
-      createdAt: new Date().toISOString(),
-      participants: meetingData.participants,
-      sessions: [],
-      taskCount: 0,
-      eventCount: 0,
-    };
-    setMeetings((prev) => [meeting, ...prev]);
-    return meeting;
+    if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
+    const created = await api.createMeeting({ workspaceId: workspace.id, title: meetingData.name });
+    const mapped = mapMeeting(created, workspace.members || []);
+    setMeetings((prev) => [mapped, ...prev]);
+    return mapped;
   };
 
   const deleteMeeting = async (meetingId) => {
-    if (isApiMode) await api.deleteMeeting(meetingId);
+    await api.deleteMeeting(meetingId);
     setMeetings((prev) => prev.filter((meeting) => String(meeting.id) !== String(meetingId)));
   };
 
   const refreshMeetingData = async (meetingId) => {
-    if (!isApiMode) return getMeetingById(meetingId);
     const [meetingDetail, summary, transcript, tasks, events, recordings] = await Promise.all([
       api.getMeeting(meetingId).catch(() => null),
       api.getMeetingSummary(meetingId).catch(() => null),
@@ -384,21 +385,6 @@ export function AppProvider({ children }) {
   };
 
   const uploadRecordingAndTranscribe = async (meetingId, asset) => {
-    if (!isApiMode) {
-      const session = createDemoSession({ fileName: asset?.name || 'recording.m4a', status: 'processing' });
-      setMeetings((prev) => prev.map((meeting) => (
-        String(meeting.id) === String(meetingId) ? { ...meeting, sessions: [session, ...meeting.sessions] } : meeting
-      )));
-      setTimeout(() => {
-        setMeetings((prev) => prev.map((meeting) => (
-          String(meeting.id) === String(meetingId)
-            ? { ...meeting, sessions: meeting.sessions.map((item) => item.id === session.id ? createDemoSession({ id: session.id, fileName: session.fileName, status: 'completed' }) : item) }
-            : meeting
-        )));
-      }, 900);
-      return session;
-    }
-
     const recording = await api.uploadRecording(meetingId, asset);
     const recordingId = recording.recordingId || recording.id;
     const transcribe = await api.transcribe(meetingId, recordingId);
@@ -411,7 +397,7 @@ export function AppProvider({ children }) {
     const session = meeting?.sessions?.find((item) => String(item.id) === String(sessionId)) || meeting?.sessions?.[0];
     const nextMap = { ...(session?.speakerMap || {}), [speakerKey]: name };
 
-    if (isApiMode && session?.transcriptId) {
+    if (session?.transcriptId) {
       const mappings = Object.entries(nextMap).map(([key, userName]) => {
         const segment = session.transcript.find((item) => item.speakerKey === key);
         const member = workspace?.members?.find((item) => item.name === userName);
@@ -427,74 +413,54 @@ export function AppProvider({ children }) {
       return;
     }
 
-    setMeetings((prev) => prev.map((item) => (
-      String(item.id) === String(meetingId)
-        ? { ...item, sessions: item.sessions.map((s) => String(s.id) === String(sessionId) ? { ...s, speakerMap: nextMap } : s) }
-        : item
-    )));
+    throw new Error('저장할 대화록이 없습니다.');
   };
 
   const addCalendarTask = async (task) => {
-    if (isApiMode) {
-      const created = await api.createTask({
-        title: task.title,
-        description: task.description,
-        assigneeId: task.assigneeId || null,
-        assigneeName: task.assignee || task.assigneeName,
-        dueDate: task.dueDate || null,
-        workspaceId: task.workspaceId || workspace?.id || null,
-        meetingId: task.meetingId || null,
-      });
-      setCalendarTasks((prev) => [mapTask(created), ...prev]);
-      return created;
-    }
-
-    setCalendarTasks((prev) => [{
-      ...task,
-      id: task.id || `manual-${Date.now()}`,
-      source: task.source || '직접 등록',
-      status: '등록됨',
-      statusCode: 'TODO',
-      workspaceId: task.workspaceId || workspace?.id,
-    }, ...prev]);
+    const created = await api.createTask({
+      title: task.title,
+      description: task.description,
+      assigneeId: task.assigneeId || null,
+      assigneeName: task.assignee || task.assigneeName,
+      dueDate: task.dueDate || null,
+      workspaceId: task.workspaceId || workspace?.id || null,
+      meetingId: task.meetingId || null,
+    });
+    setCalendarTasks((prev) => [mapTask(created), ...prev]);
+    return created;
   };
 
   const updateCalendarTask = async (taskId, updates) => {
-    if (isApiMode) {
-      const updated = await api.updateTask(taskId, updates);
-      setCalendarTasks((prev) => prev.map((task) => String(task.id) === String(taskId) ? mapTask(updated) : task));
-      return updated;
-    }
-    setCalendarTasks((prev) => prev.map((task) => String(task.id) === String(taskId) ? { ...task, ...updates } : task));
+    const updated = await api.updateTask(taskId, updates);
+    setCalendarTasks((prev) => prev.map((task) => String(task.id) === String(taskId) ? mapTask(updated) : task));
+    return updated;
   };
 
   const deleteCalendarTask = async (taskId) => {
-    if (isApiMode) await api.deleteTask(taskId);
+    await api.deleteTask(taskId);
     setCalendarTasks((prev) => prev.filter((task) => String(task.id) !== String(taskId)));
   };
 
   const addCalendarEvent = async (event) => {
-    if (isApiMode) {
-      const created = await api.createEvent({
-        title: event.title,
-        startAt: event.startAt,
-        endAt: event.endAt,
-        workspaceId: event.workspaceId || workspace?.id,
-        participantUserIds: event.participantUserIds || [],
-      });
-      setCalendarEvents((prev) => [mapEvent(created), ...prev]);
-      return created;
-    }
-    setCalendarEvents((prev) => [{ ...event, id: event.id || `event-${Date.now()}`, workspaceId: workspace?.id }, ...prev]);
+    const created = await api.createEvent({
+      title: event.title,
+      startAt: event.startAt,
+      endAt: event.endAt,
+      workspaceId: event.workspaceId || workspace?.id,
+      participantUserIds: event.participantUserIds || [],
+    });
+    setCalendarEvents((prev) => [mapEvent(created), ...prev]);
+    return created;
   };
 
   const deleteCalendarEvent = async (eventId) => {
-    if (isApiMode) await api.deleteEvent(eventId);
+    await api.deleteEvent(eventId);
     setCalendarEvents((prev) => prev.filter((event) => String(event.id) !== String(eventId)));
   };
 
   const syncNotionCalendar = async () => {
-    if (isApiMode && workspace?.id) await api.syncWorkspaceToNotion(workspace.id);
+    if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
+    await api.syncWorkspaceToNotion(workspace.id);
     setNotionConnected(true);
   };
 
