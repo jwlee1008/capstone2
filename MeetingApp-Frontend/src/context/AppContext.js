@@ -545,8 +545,27 @@ export function AppProvider({ children }) {
 
   const updateCalendarTask = async (taskId, updates) => {
     const updated = await api.updateTask(taskId, updates);
-    setCalendarTasks((prev) => prev.map((task) => String(task.id) === String(taskId) ? mapTask(updated) : task));
-    return updated;
+    const normalizedUpdates = updates.statusCode && !updates.status ? { ...updates, status: updates.statusCode } : updates;
+    const currentTask = calendarTasks.find((task) => String(task.id) === String(taskId));
+    const backendTask = updated && typeof updated === 'object' ? updated : {};
+    const nextTask = currentTask ? mapTask({
+      id: currentTask.id,
+      title: currentTask.title,
+      description: currentTask.description,
+      assigneeId: currentTask.assigneeId,
+      assigneeName: currentTask.assigneeName || currentTask.assignee,
+      dueDate: currentTask.dueDate,
+      status: currentTask.statusCode,
+      meetingId: currentTask.meetingId,
+      workspaceId: currentTask.workspaceId,
+      ...normalizedUpdates,
+      ...backendTask,
+    }) : updated;
+    setCalendarTasks((prev) => prev.map((task) => {
+      if (String(task.id) !== String(taskId)) return task;
+      return nextTask || task;
+    }));
+    return nextTask || updated;
   };
 
   const deleteCalendarTask = async (taskId) => {
