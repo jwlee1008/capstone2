@@ -720,8 +720,29 @@ export function AppProvider({ children }) {
         };
       });
       await api.saveSpeakerMappings(session.transcriptId, mappings);
-      await api.analyzeTranscript(session.transcriptId);
-      await refreshMeetingData(meetingId);
+      setMeetings((prev) => prev.map((item) => {
+        if (String(item.id) !== String(meetingId)) return item;
+        return {
+          ...item,
+          sessions: (item.sessions || []).map((sessionItem) => {
+            const isTarget = String(sessionItem.id) === String(session.id)
+              || String(sessionItem.transcriptId) === String(session.transcriptId);
+            if (!isTarget) return sessionItem;
+            return {
+              ...sessionItem,
+              speakerMap: nextMap,
+              transcript: (sessionItem.transcript || []).map((segment) => (
+                String(segment.speakerKey) === String(speakerKey)
+                  ? { ...segment, speakerName: selectedName, userId: selectedUserId }
+                  : segment
+              )),
+            };
+          }),
+        };
+      }));
+      api.analyzeTranscript(session.transcriptId)
+        .then(() => refreshMeetingData(meetingId))
+        .catch((error) => console.error('[speaker] failed to refresh analysis', error));
       return;
     }
 
