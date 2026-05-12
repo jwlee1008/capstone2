@@ -95,6 +95,27 @@ function getSpeakerKey(label = 'SPEAKER_A') {
   return String(label).replace('SPEAKER_', '');
 }
 
+function getDefaultSpeakerName(speakerKey) {
+  return `화자${speakerKey}`;
+}
+
+function isDefaultSpeakerName(speakerKey, name) {
+  return normalizeText(name) === getDefaultSpeakerName(speakerKey);
+}
+
+function getSpeakerMappingInfo(mapping) {
+  const label = mapping?.speakerLabel || mapping?.speakerKey;
+  const key = label ? getSpeakerKey(label) : '';
+  const name = normalizeText(mapping?.userName || mapping?.speakerName || mapping?.name);
+  if (!key || !name || isDefaultSpeakerName(key, name)) return null;
+  return {
+    key,
+    label,
+    name,
+    userId: mapping?.userId ?? null,
+  };
+}
+
 function splitSummary(summary) {
   if (!summary) return [];
   return summary
@@ -299,12 +320,17 @@ function buildSessionFromBackend({ transcript, summary, tasks = [], events = [],
   const segments = (transcript?.segments || []).map(mapTranscriptSegment);
   const speakerMap = {};
   normalizeList(speakerMappings).forEach((mapping) => {
-    const label = mapping.speakerLabel || mapping.speakerKey;
-    const name = mapping.userName || mapping.speakerName || mapping.name;
-    if (label && name) speakerMap[getSpeakerKey(label)] = name;
+    const mapped = getSpeakerMappingInfo(mapping);
+    if (mapped) speakerMap[mapped.key] = mapped.name;
   });
   segments.forEach((segment) => {
-    if (segment.speakerName && !speakerMap[segment.speakerKey]) speakerMap[segment.speakerKey] = segment.speakerName;
+    if (
+      segment.speakerName
+      && !isDefaultSpeakerName(segment.speakerKey, segment.speakerName)
+      && !speakerMap[segment.speakerKey]
+    ) {
+      speakerMap[segment.speakerKey] = segment.speakerName;
+    }
   });
 
   return {
@@ -325,6 +351,31 @@ function buildSessionFromBackend({ transcript, summary, tasks = [], events = [],
     events: events.map(mapEvent),
     taskCount: summary?.taskCount ?? tasks.length,
     eventCount: summary?.eventCount ?? events.length,
+  };
+}
+
+function mergeSessionSpeakerMap(nextSession, previousSession) {
+  if (!nextSession || !previousSession) return nextSession;
+  const previousMap = previousSession.speakerMap || {};
+  const mergedMap = { ...(nextSession.speakerMap || {}) };
+  Object.entries(previousMap).forEach(([key, name]) => {
+    if (!name || isDefaultSpeakerName(key, name)) return;
+    if (!mergedMap[key] || isDefaultSpeakerName(key, mergedMap[key])) mergedMap[key] = name;
+  });
+  const previousSegmentsByKey = new Map((previousSession.transcript || []).map((segment) => [String(segment.speakerKey), segment]));
+  return {
+    ...nextSession,
+    speakerMap: mergedMap,
+    transcript: (nextSession.transcript || []).map((segment) => {
+      const mappedName = mergedMap[segment.speakerKey];
+      if (!mappedName) return segment;
+      const previousSegment = previousSegmentsByKey.get(String(segment.speakerKey));
+      return {
+        ...segment,
+        speakerName: mappedName,
+        userId: previousSegment?.userId ?? segment.userId,
+      };
+    }),
   };
 }
 
@@ -672,17 +723,22 @@ export function AppProvider({ children }) {
       : [];
     const meetingEvents = events.filter((event) => String(event.meetingId) === String(meetingId));
     const session = buildSessionFromBackend({ transcript, summary, tasks, events: meetingEvents, recordings, speakerMappings });
-    setMeetings((prev) => prev.map((meeting) => (
-      String(meeting.id) === String(meetingId)
-        ? {
-          ...meeting,
-          ...mapMeeting(meetingDetail || meeting, workspace?.members || []),
-          sessions: session ? [session] : meeting.sessions,
-          taskCount: summary?.taskCount ?? tasks.length,
-          eventCount: summary?.eventCount ?? meetingEvents.length,
-        }
-        : meeting
-    )));
+    setMeetings((prev) => prev.map((meeting) => {
+      if (String(meeting.id) !== String(meetingId)) return meeting;
+      const previousSession = session
+        ? (meeting.sessions || []).find((item) => (
+          String(item.id) === String(session.id)
+          || String(item.transcriptId) === String(session.transcriptId)
+        )) || meeting.sessions?.[0]
+        : null;
+      return {
+        ...meeting,
+        ...mapMeeting(meetingDetail || meeting, workspace?.members || []),
+        sessions: session ? [mergeSessionSpeakerMap(session, previousSession)] : meeting.sessions,
+        taskCount: summary?.taskCount ?? tasks.length,
+        eventCount: summary?.eventCount ?? meetingEvents.length,
+      };
+    }));
     setCalendarTasks((prev) => {
       const others = prev.filter((task) => String(task.meetingId) !== String(meetingId));
       return [...tasks.map(mapTask), ...others];
@@ -703,7 +759,8 @@ export function AppProvider({ children }) {
     const meeting = getMeetingById(meetingId);
     const session = meeting?.sessions?.find((item) => String(item.id) === String(sessionId)) || meeting?.sessions?.[0];
     const selectedSpeaker = typeof speaker === 'string' ? { name: speaker } : speaker || {};
-    const selectedName = selectedSpeaker.name || selectedSpeaker.userName || selectedSpeaker.email || `화자${speakerKey}`;
+    const selectedName = normalizeText(selectedSpeaker.name || selectedSpeaker.userName || selectedSpeaker.email);
+    if (!selectedName) throw new Error('저장할 화자 이름을 선택하거나 입력해주세요.');
     const selectedUserId = selectedSpeaker.userId || selectedSpeaker.id || null;
     const nextMap = { ...(session?.speakerMap || {}), [speakerKey]: selectedName };
 
@@ -718,8 +775,22 @@ export function AppProvider({ children }) {
           userName,
           userId: member?.userId || null,
         };
+      }).filter((mapping) => normalizeText(mapping.userName) && !isDefaultSpeakerName(getSpeakerKey(mapping.speakerLabel), mapping.userName));
+      const savedMappings = normalizeList(await api.saveSpeakerMappings(session.transcriptId, mappings));
+      const savedMap = {};
+      const savedUserIds = {};
+      savedMappings.forEach((mapping) => {
+        const mapped = getSpeakerMappingInfo(mapping);
+        if (!mapped) return;
+        savedMap[mapped.key] = mapped.name;
+        savedUserIds[mapped.key] = mapped.userId;
       });
-      await api.saveSpeakerMappings(session.transcriptId, mappings);
+      const appliedMap = Object.entries({ ...nextMap, ...savedMap, [speakerKey]: savedMap[speakerKey] || selectedName })
+        .reduce((acc, [key, name]) => {
+          if (name && !isDefaultSpeakerName(key, name)) acc[key] = name;
+          return acc;
+        }, {});
+      const appliedUserId = savedUserIds[speakerKey] ?? selectedUserId;
       setMeetings((prev) => prev.map((item) => {
         if (String(item.id) !== String(meetingId)) return item;
         return {
@@ -730,10 +801,10 @@ export function AppProvider({ children }) {
             if (!isTarget) return sessionItem;
             return {
               ...sessionItem,
-              speakerMap: nextMap,
+              speakerMap: appliedMap,
               transcript: (sessionItem.transcript || []).map((segment) => (
                 String(segment.speakerKey) === String(speakerKey)
-                  ? { ...segment, speakerName: selectedName, userId: selectedUserId }
+                  ? { ...segment, speakerName: appliedMap[speakerKey], userId: appliedUserId }
                   : segment
               )),
             };

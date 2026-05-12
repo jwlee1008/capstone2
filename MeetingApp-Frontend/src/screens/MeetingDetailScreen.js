@@ -118,17 +118,17 @@ function SpeakerModal({ visible, speakerKey, members, onClose, onSave }) {
 
   const handleNameChange = (value) => {
     setName(value);
-    if (value.trim()) setSelectedMember(null);
+    setSelectedMember(null);
   };
 
   const handleSelectMember = (member) => {
     setSelectedMember(member);
-    setName('');
+    setName(member.name || member.email || '');
   };
 
   const handleSubmit = async () => {
     const typedName = name.trim();
-    const payload = selectedMember || typedName;
+    const payload = selectedMember ? { ...selectedMember, name: typedName || selectedMember.name } : typedName;
     if (!payload || isSaving) return;
     try {
       setIsSaving(true);
@@ -144,7 +144,10 @@ function SpeakerModal({ visible, speakerKey, members, onClose, onSave }) {
         <View style={styles.modalCard}>
           <Text style={styles.modalTitle}>화자{speakerKey} 매핑</Text>
           <TextInput style={styles.manualInput} placeholder="직접 이름 입력" value={name} onChangeText={handleNameChange} />
-          {members.map((m) => <TouchableOpacity key={m.id} style={[styles.memberPick, selectedMember?.id === m.id && styles.memberPickSelected]} onPress={() => handleSelectMember(m)}><Text style={styles.memberPickName}>{m.name}</Text><Text style={styles.memberPickRole}>{selectedMember?.id === m.id ? '선택됨' : m.role}</Text></TouchableOpacity>)}
+          {members.map((m) => {
+            const isSelected = String(selectedMember?.userId || selectedMember?.id || selectedMember?.email) === String(m.userId || m.id || m.email);
+            return <TouchableOpacity key={m.id || m.email} style={[styles.memberPick, isSelected && styles.memberPickSelected]} onPress={() => handleSelectMember(m)}><Text style={styles.memberPickName}>{m.name}</Text><Text style={styles.memberPickRole}>{isSelected ? '선택됨' : m.role}</Text></TouchableOpacity>;
+          })}
           <View style={styles.modalActions}>
             <TouchableOpacity style={styles.modalCancelBtn} onPress={onClose}><Text style={styles.modalCancelText}>취소</Text></TouchableOpacity>
             <TouchableOpacity style={[styles.modalConfirmBtn, (!selectedMember && !name.trim()) && styles.modalConfirmDisabled]} onPress={handleSubmit} disabled={isSaving || (!selectedMember && !name.trim())}><Text style={styles.modalConfirmText}>{isSaving ? '저장 중' : '저장'}</Text></TouchableOpacity>
