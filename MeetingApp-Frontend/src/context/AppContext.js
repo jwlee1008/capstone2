@@ -438,15 +438,24 @@ export function AppProvider({ children }) {
       }
     }
     const mappedWorkspace = mapWorkspace(selected, members);
-    const [backendMeetings, tasks, events, stats] = await Promise.all([
-      api.getMeetings(selectedId).then(normalizeList).catch(() => []),
-      api.getTasks({ workspaceId: selectedId }).then(normalizeList).catch(() => []),
-      api.getEvents({ workspaceId: selectedId }).then(normalizeList).catch(() => []),
-      api.getTaskStats({ workspaceId: selectedId }).catch(() => null),
-    ]);
-
+    const isSameWorkspace = workspace?.id && String(workspace.id) === String(selectedId);
     setWorkspace(mappedWorkspace);
+    if (!isSameWorkspace) {
+      setMeetings([]);
+      setCalendarTasks([]);
+      setCalendarEvents([]);
+      setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+    }
+
+    const meetingsPromise = api.getMeetings(selectedId).then(normalizeList).catch(() => []);
+    const tasksPromise = api.getTasks({ workspaceId: selectedId }).then(normalizeList).catch(() => []);
+    const eventsPromise = api.getEvents({ workspaceId: selectedId }).then(normalizeList).catch(() => []);
+    const statsPromise = api.getTaskStats({ workspaceId: selectedId }).catch(() => null);
+
+    const backendMeetings = await meetingsPromise;
     setMeetings(backendMeetings.map((meeting) => mapMeeting(meeting, members)));
+
+    const [tasks, events, stats] = await Promise.all([tasksPromise, eventsPromise, statsPromise]);
     setCalendarTasks(tasks.map(mapTask));
     setCalendarEvents(events.map(mapEvent));
     setTaskStats(normalizeTaskStats(stats, tasks));
@@ -598,8 +607,23 @@ export function AppProvider({ children }) {
   const acceptInvitation = async (invitationId) => {
     const accepted = invitations.find((item) => String(item.id) === String(invitationId));
     await api.acceptInvitation(invitationId);
-    await loadWorkspaceBundle(accepted?.workspaceId).catch(() => null);
     setInvitations((prev) => prev.filter((item) => String(item.id) !== String(invitationId)));
+    if (accepted?.workspaceId) {
+      const acceptedWorkspace = mapWorkspace({
+        id: accepted.workspaceId,
+        name: accepted.workspaceName,
+        ownerName: accepted.inviterName,
+      }, [], accepted.workspaceName);
+      setWorkspace(acceptedWorkspace);
+      setWorkspaces((prev) => [acceptedWorkspace, ...prev.filter((item) => String(item.id) !== String(acceptedWorkspace.id))]);
+      setMeetings([]);
+      setCalendarTasks([]);
+      setCalendarEvents([]);
+      setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+      await loadWorkspaceBundle(acceptedWorkspace).catch(() => null);
+      return;
+    }
+    await loadWorkspaceBundle().catch(() => null);
   };
 
   const declineInvitation = async (invitationId) => {
@@ -658,38 +682,57 @@ export function AppProvider({ children }) {
   };
 
   const refreshMeetingData = async (meetingId) => {
-    const [meetingDetail, summary, transcript, tasks, events, recordings] = await Promise.all([
-      api.getMeeting(meetingId).catch(() => null),
-      api.getMeetingSummary(meetingId).catch(() => null),
-      api.getTranscript(meetingId).catch(() => null),
-      api.getTasks({ meetingId }).catch(() => []),
-      api.getEvents({ workspaceId: workspace?.id }).catch(() => []),
-      api.getRecordings(meetingId).catch(() => []),
+    const meetingDetailPromise = api.getMeeting(meetingId).catch(() => null);
+    const summaryPromise = api.getMeetingSummary(meetingId).catch(() => null);
+    const transcriptPromise = api.getTranscript(meetingId).catch(() => null);
+    const tasksPromise = api.getTasks({ meetingId }).catch(() => []);
+    const eventsPromise = api.getEvents({ workspaceId: workspace?.id }).catch(() => []);
+    const recordingsPromise = api.getRecordings(meetingId).catch(() => []);
+
+    const applyMeetingRefresh = ({ meetingDetail, session, summary, tasks = [], meetingEvents = [] }) => {
+      setMeetings((prev) => prev.map((meeting) => (
+        String(meeting.id) === String(meetingId)
+          ? {
+            ...meeting,
+            ...mapMeeting(meetingDetail || meeting, workspace?.members || []),
+            sessions: session ? [session] : meeting.sessions,
+            taskCount: summary?.taskCount ?? tasks.length,
+            eventCount: summary?.eventCount ?? meetingEvents.length,
+          }
+          : meeting
+      )));
+    };
+
+    const [meetingDetail, transcript, recordings] = await Promise.all([
+      meetingDetailPromise,
+      transcriptPromise,
+      recordingsPromise,
     ]);
     const transcriptId = getTranscriptId(transcript);
     const speakerMappings = transcriptId
       ? await api.getSpeakerMappings(transcriptId).catch(() => [])
       : [];
-    const meetingEvents = events.filter((event) => String(event.meetingId) === String(meetingId));
-    const session = buildSessionFromBackend({ transcript, summary, tasks, events: meetingEvents, recordings, speakerMappings });
-    setMeetings((prev) => prev.map((meeting) => (
-      String(meeting.id) === String(meetingId)
-        ? {
-          ...meeting,
-          ...mapMeeting(meetingDetail || meeting, workspace?.members || []),
-          sessions: session ? [session] : meeting.sessions,
-          taskCount: summary?.taskCount ?? tasks.length,
-          eventCount: summary?.eventCount ?? meetingEvents.length,
-        }
-        : meeting
-    )));
+
+    let session = buildSessionFromBackend({ transcript, recordings, speakerMappings });
+    applyMeetingRefresh({ meetingDetail, session });
+
+    const [summary, tasks] = await Promise.all([summaryPromise, tasksPromise]);
+    session = buildSessionFromBackend({ transcript, summary, tasks, recordings, speakerMappings });
+    applyMeetingRefresh({ meetingDetail, session, summary, tasks });
     setCalendarTasks((prev) => {
       const others = prev.filter((task) => String(task.meetingId) !== String(meetingId));
       return [...tasks.map(mapTask), ...others];
     });
+
+    const events = await eventsPromise;
+    const meetingEvents = events.filter((event) => String(event.meetingId) === String(meetingId));
+    session = buildSessionFromBackend({ transcript, summary, tasks, events: meetingEvents, recordings, speakerMappings });
+    applyMeetingRefresh({ meetingDetail, session, summary, tasks, meetingEvents });
     setCalendarEvents(events.map(mapEvent));
     return session;
   };
+
+  const refreshWorkspace = async () => loadWorkspaceBundle(workspace?.id || null);
 
   const uploadRecordingAndTranscribe = async (meetingId, asset) => {
     const recording = await api.uploadRecording(meetingId, asset);
@@ -850,6 +893,7 @@ export function AppProvider({ children }) {
     changePassword,
     deleteAccount,
     selectWorkspace,
+    refreshWorkspace,
     createWorkspace,
     deleteWorkspace,
     acceptInvitation,

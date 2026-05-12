@@ -1,5 +1,6 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useCallback, useState } from 'react';
 import { Alert, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
@@ -31,12 +32,16 @@ function MeetingCard({ meeting, onPress, onDelete }) {
 }
 
 export default function MeetingListScreen({ navigation }) {
-  const { workspace, workspaces, meetings, selectWorkspace, deleteMeeting } = useAppContext();
+  const { workspace, workspaces, meetings, selectWorkspace, refreshWorkspace, deleteMeeting } = useAppContext();
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('newest');
   const [isSwitching, setIsSwitching] = useState(false);
   const filtered = meetings.filter((m) => (m.name || '').toLowerCase().includes(searchQuery.toLowerCase()) || (m.participants || []).some((p) => p.includes(searchQuery))).sort((a, b) => sortBy === 'oldest' ? new Date(a.createdAt) - new Date(b.createdAt) : sortBy === 'name' ? a.name.localeCompare(b.name, 'ko') : new Date(b.createdAt) - new Date(a.createdAt));
   const activeWorkspaceId = workspace?.id ? String(workspace.id) : null;
+
+  useFocusEffect(useCallback(() => {
+    if (workspace?.id) refreshWorkspace().catch(() => {});
+  }, [workspace?.id]));
 
   const handleSelectWorkspace = async (workspaceId) => {
     try {
