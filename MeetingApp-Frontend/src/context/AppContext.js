@@ -125,6 +125,7 @@ function mapTask(raw) {
     assigneeId: raw.assigneeId,
     assignee: raw.assigneeName || '담당자 미정',
     assigneeName: raw.assigneeName,
+    createdBy: raw.createdBy,
     dueDate: raw.dueDate ? String(raw.dueDate).slice(0, 10) : '',
     statusCode: raw.status || 'TODO',
     status: raw.status === 'DONE' ? '완료' : raw.status === 'IN_PROGRESS' ? '진행중' : '등록됨',
@@ -132,6 +133,35 @@ function mapTask(raw) {
     meetingId: raw.meetingId,
     workspaceId: raw.workspaceId,
   };
+}
+
+function getUserId(raw) {
+  return raw?.userId || raw?.id;
+}
+
+function isSameValue(a, b) {
+  return a != null && b != null && String(a) === String(b);
+}
+
+function normalizeComparable(value) {
+  return normalizeText(value).toLowerCase();
+}
+
+function isTaskAssignedToUser(task, currentUser) {
+  const userId = getUserId(currentUser);
+  if (task?.assigneeId != null) return isSameValue(task.assigneeId, userId);
+
+  const assignee = normalizeComparable(task?.assigneeName || task?.assignee);
+  if (!assignee) return false;
+  return assignee === normalizeComparable(currentUser?.name)
+    || assignee === normalizeComparable(currentUser?.email);
+}
+
+function filterPersonalTasks(tasks, currentUser, workspaceId = null) {
+  return normalizeList(tasks).filter((task) => {
+    if (workspaceId && task.workspaceId && !isSameValue(task.workspaceId, workspaceId)) return false;
+    return isTaskAssignedToUser(task, currentUser);
+  });
 }
 
 function normalizeDueDateForApi(dueDate) {
@@ -145,9 +175,9 @@ function normalizeDueDateForApi(dueDate) {
 function getTaskStatsFallback(tasks = []) {
   return {
     total: tasks.length,
-    todo: tasks.filter((task) => task.status === 'TODO').length,
-    inProgress: tasks.filter((task) => task.status === 'IN_PROGRESS').length,
-    done: tasks.filter((task) => task.status === 'DONE').length,
+    todo: tasks.filter((task) => (task.statusCode || task.status) === 'TODO').length,
+    inProgress: tasks.filter((task) => (task.statusCode || task.status) === 'IN_PROGRESS').length,
+    done: tasks.filter((task) => (task.statusCode || task.status) === 'DONE').length,
   };
 }
 
@@ -438,18 +468,18 @@ export function AppProvider({ children }) {
       }
     }
     const mappedWorkspace = mapWorkspace(selected, members);
-    const [backendMeetings, tasks, events, stats] = await Promise.all([
+    const [backendMeetings, tasks, events] = await Promise.all([
       api.getMeetings(selectedId).then(normalizeList).catch(() => []),
       api.getTasks({ workspaceId: selectedId }).then(normalizeList).catch(() => []),
       api.getEvents({ workspaceId: selectedId }).then(normalizeList).catch(() => []),
-      api.getTaskStats({ workspaceId: selectedId }).catch(() => null),
     ]);
+    const personalTasks = filterPersonalTasks(tasks, fallbackUser || user, selectedId);
 
     setWorkspace(mappedWorkspace);
     setMeetings(backendMeetings.map((meeting) => mapMeeting(meeting, members)));
-    setCalendarTasks(tasks.map(mapTask));
+    setCalendarTasks(personalTasks.map(mapTask));
     setCalendarEvents(events.map(mapEvent));
-    setTaskStats(normalizeTaskStats(stats, tasks));
+    setTaskStats(normalizeTaskStats(null, personalTasks));
     return mappedWorkspace;
   };
 
@@ -685,7 +715,7 @@ export function AppProvider({ children }) {
     )));
     setCalendarTasks((prev) => {
       const others = prev.filter((task) => String(task.meetingId) !== String(meetingId));
-      return [...tasks.map(mapTask), ...others];
+      return [...filterPersonalTasks(tasks, user, workspace?.id).map(mapTask), ...others];
     });
     setCalendarEvents(events.map(mapEvent));
     return session;
@@ -739,7 +769,9 @@ export function AppProvider({ children }) {
       meetingId: task.meetingId || null,
     });
     const mapped = mapTask(created);
-    setCalendarTasks((prev) => [mapped, ...prev]);
+    if (filterPersonalTasks([created], user, workspace?.id).length > 0) {
+      setCalendarTasks((prev) => [mapped, ...prev]);
+    }
     if (mapped.meetingId) {
       setMeetings((prev) => prev.map((meeting) => {
         if (String(meeting.id) !== String(mapped.meetingId)) return meeting;
@@ -779,10 +811,15 @@ export function AppProvider({ children }) {
       ...normalizedUpdates,
       ...backendTask,
     }) : updated;
-    setCalendarTasks((prev) => prev.map((task) => {
-      if (String(task.id) !== String(taskId)) return task;
-      return nextTask || task;
-    }));
+    setCalendarTasks((prev) => {
+      if (!nextTask || filterPersonalTasks([nextTask], user, workspace?.id).length === 0) {
+        return prev.filter((task) => String(task.id) !== String(taskId));
+      }
+      return prev.map((task) => {
+        if (String(task.id) !== String(taskId)) return task;
+        return nextTask;
+      });
+    });
     if (nextTask?.id) {
       setMeetings((prev) => prev.map((meeting) => ({
         ...meeting,
