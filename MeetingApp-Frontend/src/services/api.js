@@ -115,7 +115,7 @@ async function request(path, options = {}, retry = true) {
       clearTokens();
       authExpiredHandler?.();
     }
-    const message = data?.message || data || `HTTP ${response.status}`;
+    const message = data?.error || data?.message || data?.errors || data || `HTTP ${response.status}`;
     console.error('[api] request failed', options.method || 'GET', `${API_BASE_URL}${path}`, response.status, data);
     throw createApiError(String(message), {
       status: response.status,
@@ -431,8 +431,12 @@ export const api = {
     return request('/api/user/account', { method: 'DELETE' });
   },
 
-  syncWorkspaceToNotion(workspaceId) {
-    return request(`/api/calendar/workspaces/${workspaceId}/notion-sync`, {
+  getGoogleAuthUrl() {
+    return request('/api/oauth2/google/auth-url');
+  },
+
+  syncWorkspaceToGoogleCalendar(workspaceId) {
+    return request(`/api/calendar/workspaces/${workspaceId}/google-sync`, {
       method: 'POST',
     });
   },
