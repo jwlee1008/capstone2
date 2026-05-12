@@ -80,6 +80,22 @@ function mapMeeting(raw, members = []) {
   };
 }
 
+function toTimeMs(value) {
+  const time = value ? new Date(value).getTime() : NaN;
+  return Number.isNaN(time) ? null : time;
+}
+
+function isMeetingVisibleInWorkspace(meeting, workspace) {
+  const workspaceId = getWorkspaceId(workspace);
+  if (workspaceId && meeting?.workspaceId && String(meeting.workspaceId) !== String(workspaceId)) return false;
+
+  const workspaceCreatedAt = toTimeMs(workspace?.createdAt);
+  const meetingCreatedAt = toTimeMs(meeting?.createdAt);
+  if (workspaceCreatedAt != null && meetingCreatedAt != null && meetingCreatedAt < workspaceCreatedAt) return false;
+
+  return true;
+}
+
 function secondsToTime(seconds = 0) {
   const safe = Number(seconds) || 0;
   const min = Math.floor(safe / 60);
@@ -446,7 +462,9 @@ export function AppProvider({ children }) {
     ]);
 
     setWorkspace(mappedWorkspace);
-    setMeetings(backendMeetings.map((meeting) => mapMeeting(meeting, members)));
+    setMeetings(backendMeetings
+      .filter((meeting) => isMeetingVisibleInWorkspace(meeting, mappedWorkspace))
+      .map((meeting) => mapMeeting(meeting, members)));
     setCalendarTasks(tasks.map(mapTask));
     setCalendarEvents(events.map(mapEvent));
     setTaskStats(normalizeTaskStats(stats, tasks));
