@@ -51,7 +51,6 @@ export default function LoginScreen() {
           <View style={styles.headerSection}>
             <View style={styles.logoContainer}>
               <View style={styles.logoCircle}><Ionicons name="mic" size={34} color="#FFFFFF" /></View>
-              <View style={styles.logoBadge}><Text style={styles.logoBadgeText}>PRO</Text></View>
             </View>
             <Text style={styles.appName}>MeetingApp</Text>
             <Text style={styles.tagline}>회의 기록과 일정을 한곳에서 정리하세요</Text>

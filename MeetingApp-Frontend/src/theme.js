@@ -1,16 +1,16 @@
 export const COLORS = {
-  primary: '#4F46E5',
-  primaryDark: '#3730A3',
-  secondary: '#7C3AED',
-  background: '#F8FAFC',
+  primary: '#2563EB',
+  primaryDark: '#1D4ED8',
+  secondary: '#0F766E',
+  background: '#F6F7F9',
   surface: '#FFFFFF',
-  text: '#1E293B',
-  subtext: '#64748B',
-  border: '#E2E8F0',
-  success: '#10B981',
-  warning: '#F59E0B',
-  error: '#EF4444',
-  inputBg: '#F1F5F9',
+  text: '#111827',
+  subtext: '#6B7280',
+  border: '#E5E7EB',
+  success: '#059669',
+  warning: '#D97706',
+  error: '#DC2626',
+  inputBg: '#F3F4F6',
 };
 
 export const CARD_SHADOW = {

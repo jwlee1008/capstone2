@@ -1,5 +1,5 @@
 ﻿import React from 'react';
-import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -24,17 +24,13 @@ function CustomTabBar({ state, navigation }) {
     <View style={[styles.tabBarContainer, { paddingBottom: insets.bottom || 12 }]}>
       {state.routes.map((route, index) => {
         const isFocused = state.index === index;
-        const isCenter = index === 1;
         const icons = { Calendar: isFocused ? 'calendar' : 'calendar-outline', Home: isFocused ? 'home' : 'home-outline', MyInfo: isFocused ? 'person' : 'person-outline' };
         const labels = { Calendar: '캘린더', Home: '홈', MyInfo: '내 정보' };
         const onPress = () => {
           const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
           if (!isFocused && !event.defaultPrevented) navigation.navigate(route.name);
         };
-        if (isCenter) {
-          return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.8} style={styles.centerTabButton}><View style={[styles.centerIconWrapper, isFocused && styles.centerIconWrapperActive]}><Ionicons name={icons[route.name]} size={28} color="#FFFFFF" /></View><Text style={[styles.centerTabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
-        }
-        return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.7} style={styles.tabButton}><Ionicons name={icons[route.name]} size={24} color={isFocused ? COLORS.primary : '#94A3B8'} /><Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
+        return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.72} style={[styles.tabButton, isFocused && styles.tabButtonActive]}><Ionicons name={icons[route.name]} size={21} color={isFocused ? COLORS.primary : '#9CA3AF'} /><Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
       })}
     </View>
   );
@@ -61,12 +57,9 @@ export default function AppNavigator() {
 }
 
 const styles = StyleSheet.create({
-  tabBarContainer: { flexDirection: 'row', backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 8, paddingHorizontal: 16, alignItems: 'flex-end', shadowColor: '#000', shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 8 },
-  tabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 4 },
-  centerTabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: Platform.OS === 'web' ? -18 : -24 },
-  centerIconWrapper: { width: 60, height: 60, borderRadius: 30, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.34, shadowRadius: 8, elevation: 8 },
-  centerIconWrapperActive: { backgroundColor: COLORS.primaryDark, transform: [{ scale: 1.04 }] },
-  tabLabel: { fontSize: 10, color: '#94A3B8', marginTop: 4, fontWeight: '500' },
-  centerTabLabel: { fontSize: 10, color: '#94A3B8', marginTop: 4, fontWeight: '500' },
+  tabBarContainer: { flexDirection: 'row', backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 8, paddingHorizontal: 14, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: -1 }, shadowOpacity: 0.04, shadowRadius: 6, elevation: 6 },
+  tabButton: { flex: 1, minHeight: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 12, paddingVertical: 6 },
+  tabButtonActive: { backgroundColor: '#EFF6FF' },
+  tabLabel: { fontSize: 10, color: '#9CA3AF', marginTop: 3, fontWeight: '600' },
   tabLabelActive: { color: COLORS.primary, fontWeight: '700' },
 });
