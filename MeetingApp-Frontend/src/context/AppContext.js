@@ -196,8 +196,35 @@ function mapEvent(raw) {
   };
 }
 
+function mapPipeline(raw) {
+  if (!raw) return null;
+  const phase = raw.phase || raw.status || raw.pipelinePhase || 'UPLOADED';
+  return {
+    phase,
+    progress: raw.progress ?? raw.progressPercent ?? raw.percent ?? null,
+    message: raw.message || raw.errorMessage || raw.detail || '',
+    errorCode: raw.errorCode || raw.code || null,
+    analyzedAt: raw.analyzedAt || null,
+    updatedAt: raw.updatedAt || raw.createdAt || new Date().toISOString(),
+  };
+}
+
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function extractNotionDatabaseId(value) {
+  const text = normalizeText(value);
+  const uuidMatch = text.match(/[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}/i);
+  return uuidMatch ? uuidMatch[0].replace(/-/g, '') : text;
+}
+
+function buildNotionDatabasePayload(value) {
+  const trimmed = normalizeText(value);
+  if (!trimmed) throw new Error('Notion 데이터베이스 ID 또는 URL을 입력해주세요.');
+  const databaseId = extractNotionDatabaseId(trimmed);
+  if (/^[0-9a-f]{32}$/i.test(databaseId)) return { databaseId };
+  return trimmed.startsWith('http') ? { databaseUrl: trimmed } : { databaseId: trimmed };
 }
 
 function isEmailLike(value) {
@@ -582,6 +609,32 @@ export function AppProvider({ children }) {
     }
   };
 
+  const loginWithOAuthCode = async (provider, code) => {
+    const normalizedCode = normalizeText(code);
+    if (!normalizedCode) throw new Error('OAuth 인증 코드를 입력해주세요.');
+    try {
+      const data = await api.oauthCallback(provider, normalizedCode, 'POST');
+      setIsApiMode(true);
+      const profile = await api.getProfile().catch(() => null);
+      const loggedInUser = mapUser(profile, data);
+      saveLocalUser(loggedInUser);
+      setUser(loggedInUser);
+      await loadWorkspaceBundle(null, loggedInUser).catch(() => {
+        setWorkspace(null);
+        setWorkspaces([]);
+        setInvitations([]);
+        setMeetings([]);
+        setCalendarTasks([]);
+        setCalendarEvents([]);
+        setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+      });
+      return loggedInUser;
+    } catch (error) {
+      resetAppState();
+      throw error;
+    }
+  };
+
   const logout = async () => {
     if (isApiMode) await api.logout(user?.id).catch(() => {});
     removeLocalValue(LOCAL_USER_KEY);
@@ -616,6 +669,11 @@ export function AppProvider({ children }) {
   const deleteAccount = async () => {
     await api.deleteAccount();
     resetAppState();
+  };
+
+  const linkNotionAccount = async (code) => {
+    const result = await api.linkNotionAccount(code);
+    return result;
   };
 
   const selectWorkspace = async (workspaceId) => {
@@ -757,9 +815,82 @@ export function AppProvider({ children }) {
   const uploadRecordingAndTranscribe = async (meetingId, asset) => {
     const recording = await api.uploadRecording(meetingId, asset);
     const recordingId = recording.recordingId || recording.id;
+    if (recordingId) {
+      const pendingSession = {
+        id: `recording-${recordingId}`,
+        recordingId,
+        startedAt: recording.createdAt || new Date().toISOString(),
+        duration: recording.durationSec ? `${Math.round(recording.durationSec / 60)}분` : null,
+        fileName: recording.fileName || recording.s3Key?.split('/').pop() || asset?.name || 'recording.m4a',
+        status: 'processing',
+        processStatus: 'processing',
+        pipeline: mapPipeline({ phase: 'UPLOADED', message: '업로드 완료' }),
+        speakerMap: {},
+        summary: '',
+        summaryBullets: [],
+        keywords: [],
+        transcript: [],
+        tasks: [],
+        events: [],
+        taskCount: 0,
+        eventCount: 0,
+      };
+      setMeetings((prev) => prev.map((meeting) => (
+        String(meeting.id) === String(meetingId)
+          ? { ...meeting, sessions: [pendingSession, ...(meeting.sessions || []).filter((item) => String(item.recordingId) !== String(recordingId))] }
+          : meeting
+      )));
+    }
     const transcribe = await api.transcribe(meetingId, recordingId);
     await refreshMeetingData(meetingId);
-    return transcribe;
+    return { ...transcribe, recordingId };
+  };
+
+  const refreshRecordingPipeline = async (meetingId, recordingId) => {
+    let pipelineResponse;
+    try {
+      pipelineResponse = await api.getRecordingPipeline(recordingId);
+    } catch (error) {
+      if (error?.status === 404) {
+        setMeetings((prev) => prev.map((meeting) => {
+          if (String(meeting.id) !== String(meetingId)) return meeting;
+          return {
+            ...meeting,
+            sessions: (meeting.sessions || []).map((session) => (
+              String(session.recordingId) === String(recordingId)
+                ? {
+                  ...session,
+                  pipelineUnsupported: true,
+                  pipeline: session.pipeline || mapPipeline({ phase: 'UPLOADED', message: '업로드 완료. 서버 처리 결과를 기다리는 중입니다.' }),
+                }
+                : session
+            )),
+          };
+        }));
+        return null;
+      }
+      throw error;
+    }
+    const pipeline = mapPipeline(pipelineResponse);
+    if (!pipeline) return null;
+    setMeetings((prev) => prev.map((meeting) => {
+      if (String(meeting.id) !== String(meetingId)) return meeting;
+      return {
+        ...meeting,
+        sessions: (meeting.sessions || []).map((session) => (
+          String(session.recordingId) === String(recordingId)
+            ? {
+              ...session,
+              pipeline,
+              processStatus: pipeline.phase === 'COMPLETE' ? 'done' : pipeline.phase === 'FAILED' ? 'failed' : 'processing',
+              status: pipeline.phase === 'COMPLETE' ? 'completed' : pipeline.phase === 'FAILED' ? 'failed' : 'processing',
+            }
+            : session
+        )),
+      };
+    }));
+    if (pipeline.phase === 'COMPLETE') await refreshMeetingData(meetingId).catch(() => {});
+    return pipeline;
   };
 
   const updateSpeakerName = async (meetingId, sessionId, speakerKey, speaker) => {
@@ -941,11 +1072,32 @@ export function AppProvider({ children }) {
     setCalendarEvents((prev) => prev.filter((event) => String(event.id) !== String(eventId)));
   };
 
-  const syncGoogleCalendar = async () => {
-    if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
-    await api.syncWorkspaceToNotion(workspace.id);
-    setCalendarExported(true);
+  const setNotionCalendarDatabase = async (value) => {
+    return api.setNotionCalendarDatabase(buildNotionDatabasePayload(value));
   };
+
+  const setNotionMeetingNotesDatabase = async (value) => {
+    return api.setNotionMeetingNotesDatabase(buildNotionDatabasePayload(value));
+  };
+
+  const syncEventToNotion = async (eventId) => api.syncEventToNotion(eventId);
+
+  const syncEventsToNotion = async (eventIds) => {
+    const ids = (eventIds || []).filter(Boolean);
+    if (ids.length === 0) throw new Error('동기화할 일정이 없습니다.');
+    return api.syncEventsToNotion(ids);
+  };
+
+  const syncWorkspaceToNotion = async () => {
+    if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
+    const result = await api.syncWorkspaceToNotion(workspace.id);
+    setCalendarExported(true);
+    return result;
+  };
+
+  const exportMeetingPdf = async (meetingId, includeEvents = true) => api.exportMeetingPdf(meetingId, includeEvents);
+
+  const exportMeetingToNotion = async (meetingId, includeEvents = true) => api.exportMeetingToNotion(meetingId, includeEvents);
 
   const value = useMemo(() => ({
     user,
@@ -960,12 +1112,14 @@ export function AppProvider({ children }) {
     isApiMode,
     isRestoringSession,
     login,
+    loginWithOAuthCode,
     register,
     logout,
     updateUser,
     updateProfileImageFromAsset,
     changePassword,
     deleteAccount,
+    linkNotionAccount,
     selectWorkspace,
     createWorkspace,
     deleteWorkspace,
@@ -978,6 +1132,7 @@ export function AppProvider({ children }) {
     deleteRecording,
     refreshMeetingData,
     uploadRecordingAndTranscribe,
+    refreshRecordingPipeline,
     updateSpeakerName,
     addCalendarTask,
     updateCalendarTask,
@@ -985,7 +1140,13 @@ export function AppProvider({ children }) {
     addCalendarEvent,
     deleteCalendarEvent,
     setCalendarExported,
-    syncGoogleCalendar,
+    setNotionCalendarDatabase,
+    setNotionMeetingNotesDatabase,
+    syncEventToNotion,
+    syncEventsToNotion,
+    syncWorkspaceToNotion,
+    exportMeetingPdf,
+    exportMeetingToNotion,
     getMeetingById,
   }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, calendarExported, isApiMode, isRestoringSession]);
 

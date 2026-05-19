@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Image, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useAppContext } from '../context/AppContext';
+import { api } from '../services/api';
 import { COLORS } from '../theme';
 
 function SettingRow({ icon, iconBg, iconColor, label, value, onPress, hasArrow = true, danger = false }) {
@@ -41,9 +42,13 @@ export default function MyInfoScreen() {
     updateProfileImageFromAsset,
     changePassword,
     deleteAccount,
+    linkNotionAccount,
   } = useAppContext();
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showNotionModal, setShowNotionModal] = useState(false);
+  const [notionCode, setNotionCode] = useState('');
+  const [isLinkingNotion, setIsLinkingNotion] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const totalSessions = meetings.reduce((acc, meeting) => acc + meeting.sessions.length, 0);
 
@@ -112,6 +117,36 @@ export default function MyInfoScreen() {
     ]);
   };
 
+  const handleStartNotionLink = async () => {
+    try {
+      setIsLinkingNotion(true);
+      const data = await api.getNotionLinkAuthUrl();
+      const authUrl = data?.authUrl || data?.url || data;
+      if (!authUrl) throw new Error('Notion 연동 URL을 받지 못했습니다.');
+      setShowNotionModal(true);
+      await Linking.openURL(authUrl);
+    } catch (error) {
+      Alert.alert('Notion 연동 실패', error?.message || '연동 URL을 열지 못했습니다.');
+    } finally {
+      setIsLinkingNotion(false);
+    }
+  };
+
+  const handleSubmitNotionCode = async () => {
+    if (!notionCode.trim()) return Alert.alert('입력 오류', 'Notion OAuth code를 입력해주세요.');
+    try {
+      setIsLinkingNotion(true);
+      await linkNotionAccount(notionCode.trim());
+      setNotionCode('');
+      setShowNotionModal(false);
+      Alert.alert('연동 완료', 'Notion 계정이 연결되었습니다.');
+    } catch (error) {
+      Alert.alert('Notion 연동 실패', error?.message || 'Notion 계정을 연결하지 못했습니다.');
+    } finally {
+      setIsLinkingNotion(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -159,6 +194,10 @@ export default function MyInfoScreen() {
           <SettingRow icon="trash-outline" iconBg="#FEF2F2" iconColor={COLORS.error} label="회원 탈퇴" onPress={handleDeleteAccount} danger />
         </SectionCard>
 
+        <SectionCard title="Notion 연동">
+          <SettingRow icon="link-outline" iconBg="#F8FAFC" iconColor={COLORS.text} label="Notion 계정 연결" value={isLinkingNotion ? '연동 준비 중' : 'OAuth 연결'} onPress={handleStartNotionLink} />
+        </SectionCard>
+
         <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.85}>
           <Ionicons name="log-out-outline" size={18} color={COLORS.error} />
           <Text style={styles.logoutText}>로그아웃</Text>
@@ -168,6 +207,7 @@ export default function MyInfoScreen() {
 
       <EditProfileModal visible={showEditProfileModal} user={user} onClose={() => setShowEditProfileModal(false)} onSave={handleSaveProfile} />
       <PasswordModal visible={showPasswordModal} onClose={() => setShowPasswordModal(false)} onSave={handleChangePassword} />
+      <NotionLinkModal visible={showNotionModal} value={notionCode} onChange={setNotionCode} onClose={() => setShowNotionModal(false)} onSave={handleSubmitNotionCode} isSaving={isLinkingNotion} />
     </SafeAreaView>
   );
 }
@@ -287,6 +327,30 @@ function PasswordField({ label, value, onChangeText }) {
   );
 }
 
+function NotionLinkModal({ visible, value, onChange, onClose, onSave, isSaving }) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={onClose}>
+        <TouchableOpacity style={styles.profileEditModal} activeOpacity={1}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.editModalTitle}>Notion 계정 연결</Text>
+          <Text style={styles.notionHelpText}>브라우저에서 Notion 허용 후 callback URL의 code 값을 붙여넣으면 현재 계정에 연결됩니다.</Text>
+          <View style={styles.editInputWrap}>
+            <Ionicons name="key-outline" size={16} color={COLORS.subtext} />
+            <TextInput style={styles.editInput} placeholder="OAuth code" placeholderTextColor="#A0AEC0" value={value} onChangeText={onChange} autoCapitalize="none" />
+          </View>
+          <View style={styles.editModalBtns}>
+            <TouchableOpacity style={styles.editCancelBtn} onPress={onClose}><Text style={styles.editCancelText}>취소</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.editConfirmBtn, (!value.trim() || isSaving) && styles.editConfirmDisabled]} onPress={onSave} disabled={!value.trim() || isSaving}>
+              <Text style={styles.editConfirmText}>{isSaving ? '연동 중' : '연동'}</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.background },
   scrollContent: { paddingBottom: 40 },
@@ -323,6 +387,7 @@ const styles = StyleSheet.create({
   profileEditModal: { backgroundColor: COLORS.surface, borderRadius: 24, padding: 24, width: '100%' },
   modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: COLORS.border, alignSelf: 'center', marginBottom: 20 },
   editModalTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, marginBottom: 16 },
+  notionHelpText: { fontSize: 12, color: COLORS.subtext, lineHeight: 18, marginTop: -6, marginBottom: 12 },
   editAvatarPreview: { alignItems: 'center', marginBottom: 20 },
   editAvatarCircle: { width: 64, height: 64, borderRadius: 20, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
   editAvatarText: { fontSize: 26, fontWeight: '700', color: COLORS.primary },

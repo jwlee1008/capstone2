@@ -20,6 +20,8 @@ const Tab = createBottomTabNavigator();
 
 function CustomTabBar({ state, navigation }) {
   const insets = useSafeAreaInsets();
+  const { invitations } = useAppContext();
+  const inviteCount = invitations?.length || 0;
   return (
     <View style={[styles.tabBarContainer, { paddingBottom: insets.bottom || 12 }]}>
       {state.routes.map((route, index) => {
@@ -32,9 +34,9 @@ function CustomTabBar({ state, navigation }) {
           if (!isFocused && !event.defaultPrevented) navigation.navigate(route.name);
         };
         if (isCenter) {
-          return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.8} style={styles.centerTabButton}><View style={[styles.centerIconWrapper, isFocused && styles.centerIconWrapperActive]}><Ionicons name={icons[route.name]} size={28} color="#FFFFFF" /></View><Text style={[styles.centerTabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
+          return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.8} style={styles.centerTabButton}><View style={[styles.centerIconWrapper, isFocused && styles.centerIconWrapperActive]}><Ionicons name={icons[route.name]} size={28} color="#FFFFFF" />{route.name === 'Home' && inviteCount > 0 ? <View style={styles.inviteBadge}><Text style={styles.inviteBadgeText}>{inviteCount > 9 ? '9+' : inviteCount}</Text></View> : null}</View><Text style={[styles.centerTabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
         }
-        return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.7} style={styles.tabButton}><Ionicons name={icons[route.name]} size={24} color={isFocused ? COLORS.primary : '#94A3B8'} /><Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
+        return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.7} style={styles.tabButton}><View><Ionicons name={icons[route.name]} size={24} color={isFocused ? COLORS.primary : '#94A3B8'} />{route.name === 'Home' && inviteCount > 0 ? <View style={styles.inviteBadgeSmall}><Text style={styles.inviteBadgeText}>{inviteCount > 9 ? '9+' : inviteCount}</Text></View> : null}</View><Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
       })}
     </View>
   );
@@ -79,4 +81,7 @@ const styles = StyleSheet.create({
   tabLabel: { fontSize: 10, color: '#94A3B8', marginTop: 4, fontWeight: '500' },
   centerTabLabel: { fontSize: 10, color: '#94A3B8', marginTop: 4, fontWeight: '500' },
   tabLabelActive: { color: COLORS.primary, fontWeight: '700' },
+  inviteBadge: { position: 'absolute', top: -4, right: -6, minWidth: 20, height: 20, borderRadius: 10, backgroundColor: COLORS.error, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5, borderWidth: 2, borderColor: COLORS.surface },
+  inviteBadgeSmall: { position: 'absolute', top: -8, right: -12, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: COLORS.error, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, borderWidth: 2, borderColor: COLORS.surface },
+  inviteBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
 });

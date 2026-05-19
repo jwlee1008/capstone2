@@ -82,6 +82,14 @@ export function setAuthExpiredHandler(handler) {
   authExpiredHandler = typeof handler === 'function' ? handler : null;
 }
 
+function getAuthHeaders(extraHeaders = {}) {
+  restoreTokens();
+  return {
+    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    ...extraHeaders,
+  };
+}
+
 async function parseResponse(response) {
   const text = await response.text();
   if (!text) return null;
@@ -463,9 +471,97 @@ export const api = {
     return request('/api/oauth2/google/auth-url');
   },
 
+  getNotionAuthUrl() {
+    return request('/api/oauth2/notion/auth-url');
+  },
+
+  getNotionLinkAuthUrl() {
+    return request('/api/oauth2/notion/link/auth-url');
+  },
+
+  oauthCallback(provider, code, method = 'POST') {
+    const normalizedProvider = String(provider || '').toLowerCase();
+    const path = `/api/oauth2/${normalizedProvider}/callback`;
+    const call = method === 'GET'
+      ? request(`${path}?code=${encodeURIComponent(code)}`)
+      : request(path, {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+      });
+    return call.then((data) => {
+      setTokens(data);
+      return data;
+    });
+  },
+
+  linkNotionAccount(code) {
+    return request('/api/oauth2/notion/link', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+  },
+
+  setNotionCalendarDatabase(payload) {
+    return request('/api/oauth2/notion/calendar-database', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  setNotionMeetingNotesDatabase(payload) {
+    return request('/api/oauth2/notion/meeting-notes-database', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  syncEventToNotion(eventId) {
+    return request(`/api/calendar/events/${eventId}/notion-sync`, {
+      method: 'POST',
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+    });
+  },
+
   syncWorkspaceToNotion(workspaceId) {
     return request(`/api/calendar/workspaces/${workspaceId}/notion-sync`, {
       method: 'POST',
+      timeoutMs: UPLOAD_TIMEOUT_MS,
     });
+  },
+
+  syncEventsToNotion(eventIds) {
+    return request('/api/calendar/events/notion-sync-batch', {
+      method: 'POST',
+      body: JSON.stringify({ eventIds }),
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+    });
+  },
+
+  getRecordingPipeline(recordingId) {
+    return request(`/api/recordings/${recordingId}/pipeline`);
+  },
+
+  exportMeetingToNotion(meetingId, includeEvents = true) {
+    return request(`/api/meetings/${meetingId}/notion-export?includeEvents=${includeEvents ? 'true' : 'false'}`, {
+      method: 'POST',
+    });
+  },
+
+  async exportMeetingPdf(meetingId, includeEvents = true) {
+    const path = `/api/meetings/${meetingId}/export/pdf?includeEvents=${includeEvents ? 'true' : 'false'}`;
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'GET',
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      const data = await parseResponse(response);
+      throw createApiError(String(data?.error || data?.message || data || `HTTP ${response.status}`), { status: response.status });
+    }
+    const blob = await response.blob();
+    return {
+      blob,
+      filename: `meeting-${meetingId}.pdf`,
+      objectUrl: Platform.OS === 'web' && typeof URL !== 'undefined' ? URL.createObjectURL(blob) : null,
+    };
   },
 };

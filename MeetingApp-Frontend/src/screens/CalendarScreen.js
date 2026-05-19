@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Linking, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAppContext } from '../context/AppContext';
 import { COLORS } from '../theme';
 
@@ -13,8 +14,39 @@ const STATUS_OPTIONS = [
 
 const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
 const MONTH_NAMES = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'];
+const NOTION_CALENDAR_DB_KEY = 'meetflowNotionCalendarDatabase';
 
 const pad2 = (value) => String(value).padStart(2, '0');
+
+function readLocalValue(key, fallback = '') {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage.getItem(key) || fallback : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeLocalValue(key, value) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
+  } catch {}
+}
+
+async function readStoredValue(key, fallback = '') {
+  try {
+    const stored = await AsyncStorage.getItem(key);
+    return stored || readLocalValue(key, fallback);
+  } catch {
+    return readLocalValue(key, fallback);
+  }
+}
+
+async function writeStoredValue(key, value) {
+  writeLocalValue(key, value);
+  try {
+    await AsyncStorage.setItem(key, value);
+  } catch {}
+}
 
 const toDateKey = (value) => {
   if (!value) return 'unscheduled';
@@ -93,6 +125,11 @@ const buildGoogleCalendarUrl = ({ title, startAt, endAt, description, location }
   return `https://calendar.google.com/calendar/render?${query}`;
 };
 
+const buildNotionPageUrl = (pageId) => {
+  const normalized = String(pageId || '').replace(/-/g, '');
+  return normalized ? `https://www.notion.so/${normalized}` : '';
+};
+
 const getStatusLabel = (code) => STATUS_OPTIONS.find((item) => item.code === code)?.label || '등록';
 
 function normalizeTitle(value) {
@@ -145,8 +182,14 @@ export default function CalendarScreen() {
     deleteCalendarTask,
     addCalendarEvent,
     deleteCalendarEvent,
+    setNotionCalendarDatabase,
+    syncEventToNotion,
+    syncEventsToNotion,
+    syncWorkspaceToNotion,
   } = useAppContext();
   const [eventForm, setEventForm] = useState({ title: '', date: '', startTime: '10:00', endTime: '11:00' });
+  const [notionDbInput, setNotionDbInput] = useState(() => readLocalValue(NOTION_CALENDAR_DB_KEY));
+  const [notionAction, setNotionAction] = useState(null);
   const [showComposer, setShowComposer] = useState(false);
   const [visibleMonth, setVisibleMonth] = useState(() => new Date());
   const [selectedDateKey, setSelectedDateKey] = useState(getTodayKey);
@@ -163,6 +206,16 @@ export default function CalendarScreen() {
   const scheduledCount = items.filter((item) => item.dateKey !== 'unscheduled').length;
   const unscheduledCount = items.length - scheduledCount;
   const doneCount = taskStats.done ?? calendarTasks.filter((task) => task.statusCode === 'DONE').length;
+
+  useEffect(() => {
+    let isMounted = true;
+    readStoredValue(NOTION_CALENDAR_DB_KEY).then((value) => {
+      if (isMounted && value) setNotionDbInput(value);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const openGoogleCalendar = async (item) => {
     const payload = item.kind === 'task'
@@ -225,6 +278,110 @@ export default function CalendarScreen() {
     }
   };
 
+  const handleSaveNotionDatabase = async () => {
+    try {
+      setNotionAction('database');
+      const result = await setNotionCalendarDatabase(notionDbInput);
+      const savedDatabaseId = result?.calendarDatabaseId || notionDbInput.trim();
+      setNotionDbInput(savedDatabaseId);
+      await writeStoredValue(NOTION_CALENDAR_DB_KEY, savedDatabaseId);
+      Alert.alert('등록 완료', '캘린더용 Notion 데이터베이스를 저장했습니다.');
+    } catch (error) {
+      Alert.alert('등록 실패', error?.message || 'Notion 데이터베이스를 저장하지 못했습니다.');
+    } finally {
+      setNotionAction(null);
+    }
+  };
+
+  const handleSyncEvent = async (item) => {
+    if (item.kind === 'task' && item.dateKey === 'unscheduled') {
+      return Alert.alert('동기화 불가', '날짜가 있는 할일만 Notion 일정으로 저장할 수 있습니다.');
+    }
+    try {
+      setNotionAction(`event-${item.rawId}`);
+      const eventId = item.kind === 'event'
+        ? item.rawId
+        : (await addCalendarEvent({
+          title: item.title,
+          startAt: `${item.dateKey}T09:00:00`,
+          endAt: `${item.dateKey}T10:00:00`,
+        }))?.id;
+      const result = await syncEventToNotion(eventId);
+      const notionUrl = buildNotionPageUrl(result?.notionPageId);
+      Alert.alert(
+        '저장 완료',
+        notionUrl ? 'Notion 페이지가 생성되었습니다. 페이지를 열어 확인해보세요.' : '일정을 Notion 데이터베이스에 저장했습니다.',
+        notionUrl ? [
+          { text: '닫기', style: 'cancel' },
+          { text: '열기', onPress: () => Linking.openURL(notionUrl) },
+        ] : undefined,
+      );
+    } catch (error) {
+      Alert.alert('저장 실패', error?.message || '일정을 Notion에 저장하지 못했습니다.');
+    } finally {
+      setNotionAction(null);
+    }
+  };
+
+  const handleSyncAllVisible = async () => {
+    const eventIds = items.filter((item) => item.kind === 'event').map((item) => item.rawId);
+    const taskItems = items.filter((item) => item.kind === 'task' && item.dateKey !== 'unscheduled');
+    try {
+      setNotionAction('batch');
+      const createdEventIds = [];
+      for (const item of taskItems) {
+        const created = await addCalendarEvent({
+          title: item.title,
+          startAt: `${item.dateKey}T09:00:00`,
+          endAt: `${item.dateKey}T10:00:00`,
+        });
+        if (created?.id) createdEventIds.push(created.id);
+      }
+      const targetEventIds = [...eventIds, ...createdEventIds];
+      if (targetEventIds.length === 0) throw new Error('동기화할 일정이 없습니다.');
+      const results = [];
+      for (const eventId of targetEventIds) {
+        try {
+          const result = await syncEventToNotion(eventId);
+          results.push({ eventId, status: 'SUCCESS', notionPageId: result?.notionPageId });
+        } catch (error) {
+          results.push({ eventId, status: 'FAILED', message: error?.message || '저장 실패' });
+        }
+      }
+      const successCount = results.filter((item) => item.status === 'SUCCESS').length;
+      const firstPageUrl = buildNotionPageUrl(results.find((item) => item.notionPageId)?.notionPageId);
+      Alert.alert(
+        successCount === targetEventIds.length ? '저장 완료' : '일부 저장 실패',
+        `${successCount}/${targetEventIds.length}개 일정을 Notion에 저장했습니다.`,
+        firstPageUrl ? [
+          { text: '닫기', style: 'cancel' },
+          { text: '첫 페이지 열기', onPress: () => Linking.openURL(firstPageUrl) },
+        ] : undefined,
+      );
+    } catch (error) {
+      Alert.alert('저장 실패', error?.message || '일괄 저장을 완료하지 못했습니다.');
+    } finally {
+      setNotionAction(null);
+    }
+  };
+
+  const handleSyncWorkspace = async () => {
+    try {
+      setNotionAction('workspace');
+      const result = await syncWorkspaceToNotion();
+      const syncedCount = Number(result?.syncedCount ?? 0);
+      if (syncedCount === 0) {
+        Alert.alert('저장할 일정 없음', '워크스페이스 전체 저장은 현재 계정이 직접 만든 일정만 대상으로 처리됩니다.');
+      } else {
+        Alert.alert('저장 완료', `${syncedCount}개 일정을 Notion에 저장했습니다.`);
+      }
+    } catch (error) {
+      Alert.alert('저장 실패', error?.message || '워크스페이스 일정을 저장하지 못했습니다.');
+    } finally {
+      setNotionAction(null);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -243,6 +400,30 @@ export default function CalendarScreen() {
           <Stat label="날짜 있음" value={scheduledCount} />
           <Stat label="미정" value={unscheduledCount} />
           <Stat label="완료" value={doneCount} />
+        </View>
+
+        <View style={styles.notionCard}>
+          <View style={styles.notionHeader}>
+            <View style={styles.notionIcon}><Ionicons name="albums-outline" size={18} color={COLORS.text} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.notionTitle}>Notion 캘린더</Text>
+              <Text style={styles.notionDesc}>DB 등록 후 일정 단건, 전체, 워크스페이스 저장을 실행합니다</Text>
+            </View>
+          </View>
+          <View style={styles.notionInputRow}>
+            <TextInput style={[styles.input, styles.notionInput]} placeholder="Notion DB ID 또는 URL" placeholderTextColor="#A0AEC0" value={notionDbInput} onChangeText={setNotionDbInput} autoCapitalize="none" />
+            <TouchableOpacity style={[styles.notionSaveBtn, (!notionDbInput.trim() || notionAction === 'database') && styles.exportBtnDisabled]} onPress={handleSaveNotionDatabase} disabled={!notionDbInput.trim() || notionAction === 'database'}>
+              <Ionicons name="save-outline" size={17} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.notionActionRow}>
+            <TouchableOpacity style={styles.notionActionBtn} onPress={handleSyncWorkspace} disabled={Boolean(notionAction)}>
+              <Text style={styles.notionActionText}>{notionAction === 'workspace' ? '저장 중' : '워크스페이스 전체'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.notionActionBtn} onPress={handleSyncAllVisible} disabled={Boolean(notionAction)}>
+              <Text style={styles.notionActionText}>{notionAction === 'batch' ? '저장 중' : '현재 일정 일괄'}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.monthCard}>
@@ -316,6 +497,7 @@ export default function CalendarScreen() {
                 item={item}
                 onDelete={() => handleDeleteItem(item)}
                 onExport={() => openGoogleCalendar(item)}
+                onNotionSync={() => handleSyncEvent(item)}
                 onStatusChange={handleUpdateTaskStatus}
               />
             ))
@@ -347,8 +529,9 @@ function Stat({ label, value }) {
   return <View style={styles.statBox}><Text style={styles.statValue}>{value}</Text><Text style={styles.statLabel}>{label}</Text></View>;
 }
 
-function CalendarItem({ item, onDelete, onExport, onStatusChange }) {
+function CalendarItem({ item, onDelete, onExport, onNotionSync, onStatusChange }) {
   const isTask = item.kind === 'task';
+  const canSyncNotion = item.kind === 'event' || item.dateKey !== 'unscheduled';
   return (
     <View style={styles.itemCard}>
       <View style={[styles.typeRail, isTask ? styles.taskRail : styles.eventRail]} />
@@ -390,6 +573,10 @@ function CalendarItem({ item, onDelete, onExport, onStatusChange }) {
           <Ionicons name="open-outline" size={15} color={item.dateKey === 'unscheduled' ? COLORS.subtext : COLORS.primary} />
           <Text style={[styles.exportBtnText, item.dateKey === 'unscheduled' && styles.exportBtnTextDisabled]}>Google 캘린더로 열기</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={[styles.exportBtn, !canSyncNotion && styles.exportBtnDisabled]} onPress={onNotionSync} activeOpacity={0.85} disabled={!canSyncNotion}>
+          <Ionicons name="cloud-upload-outline" size={15} color={!canSyncNotion ? COLORS.subtext : COLORS.text} />
+          <Text style={[styles.exportBtnText, !canSyncNotion && styles.exportBtnTextDisabled, canSyncNotion && styles.notionExportText]}>Notion에 저장</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -406,6 +593,17 @@ const styles = StyleSheet.create({
   statBox: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 12, paddingVertical: 11, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
   statValue: { color: COLORS.text, fontSize: 18, fontWeight: '700' },
   statLabel: { color: COLORS.subtext, fontSize: 10, marginTop: 2, fontWeight: '600' },
+  notionCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 14, marginBottom: 14, borderWidth: 1, borderColor: COLORS.border },
+  notionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+  notionIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#F8FAFC', alignItems: 'center', justifyContent: 'center' },
+  notionTitle: { fontSize: 15, fontWeight: '800', color: COLORS.text },
+  notionDesc: { fontSize: 11, color: COLORS.subtext, marginTop: 2 },
+  notionInputRow: { flexDirection: 'row', gap: 8 },
+  notionInput: { flex: 1, marginBottom: 0 },
+  notionSaveBtn: { width: 42, height: 42, borderRadius: 11, backgroundColor: COLORS.text, alignItems: 'center', justifyContent: 'center' },
+  notionActionRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  notionActionBtn: { flex: 1, height: 38, borderRadius: 10, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: COLORS.border, alignItems: 'center', justifyContent: 'center' },
+  notionActionText: { fontSize: 12, color: COLORS.text, fontWeight: '800' },
   monthCard: { backgroundColor: COLORS.surface, borderRadius: 18, padding: 14, marginBottom: 14, borderWidth: 1, borderColor: COLORS.border },
   monthHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12 },
   monthNavBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#F8FAFC', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: COLORS.border },
@@ -476,4 +674,5 @@ const styles = StyleSheet.create({
   exportBtnDisabled: { opacity: 0.65 },
   exportBtnText: { color: COLORS.primary, fontWeight: '700', fontSize: 12 },
   exportBtnTextDisabled: { color: COLORS.subtext },
+  notionExportText: { color: COLORS.text },
 });

@@ -1,19 +1,49 @@
-﻿import React, { useState } from 'react';
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
+import { api } from '../services/api';
 import { COLORS } from '../theme';
 
 export default function LoginScreen() {
-  const { login, register } = useAppContext();
+  const { login, loginWithOAuthCode, register } = useAppContext();
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [oauthProvider, setOauthProvider] = useState(null);
+  const [oauthCode, setOauthCode] = useState('');
   const [focusedField, setFocusedField] = useState(null);
+
+  const submitOAuthCode = async (provider = oauthProvider, code = oauthCode) => {
+    if (!provider || !code.trim()) return Alert.alert('인증 코드 필요', 'OAuth 인증 후 받은 code를 입력해주세요.');
+    setIsLoading(true);
+    try {
+      await loginWithOAuthCode(provider, code.trim());
+      setOauthProvider(null);
+      setOauthCode('');
+    } catch (error) {
+      Alert.alert('소셜 로그인 실패', error?.message || '인증 코드를 처리하지 못했습니다.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const tryConsumeUrl = async (url) => {
+      const parsed = parseOAuthUrl(url);
+      if (!parsed?.code || !parsed.provider) return;
+      setOauthProvider(parsed.provider);
+      setOauthCode(parsed.code);
+      await submitOAuthCode(parsed.provider, parsed.code);
+    };
+    Linking.getInitialURL().then((url) => url && tryConsumeUrl(url)).catch(() => {});
+    const subscription = Linking.addEventListener('url', ({ url }) => tryConsumeUrl(url));
+    return () => subscription?.remove?.();
+  }, []);
 
   const handleSubmit = async () => {
     const trimmedEmail = email.trim();
@@ -39,6 +69,22 @@ export default function LoginScreen() {
       }
     } catch (error) {
       Alert.alert('요청 실패', error?.message || '다시 시도해주세요.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const startSocialLogin = async (provider) => {
+    setIsLoading(true);
+    try {
+      const data = provider === 'google' ? await api.getGoogleAuthUrl() : await api.getNotionAuthUrl();
+      const authUrl = data?.authUrl || data?.url || data;
+      if (!authUrl) throw new Error('OAuth 인증 URL을 받지 못했습니다.');
+      setOauthProvider(provider);
+      setOauthCode('');
+      await Linking.openURL(authUrl);
+    } catch (error) {
+      Alert.alert('소셜 로그인 실패', error?.message || '인증 URL을 열지 못했습니다.');
     } finally {
       setIsLoading(false);
     }
@@ -74,6 +120,21 @@ export default function LoginScreen() {
             <TouchableOpacity style={[styles.loginButton, isLoading && styles.loginButtonDisabled]} onPress={handleSubmit} activeOpacity={0.85} disabled={isLoading}>
               {isLoading ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={styles.loginButtonText}>{isRegisterMode ? '회원가입' : '로그인'}</Text>}
             </TouchableOpacity>
+            {!isRegisterMode ? (
+              <>
+                <View style={styles.socialDivider}><View style={styles.dividerLine} /><Text style={styles.dividerText}>또는</Text><View style={styles.dividerLine} /></View>
+                <View style={styles.socialRow}>
+                  <TouchableOpacity style={styles.socialButton} onPress={() => startSocialLogin('google')} activeOpacity={0.85} disabled={isLoading}>
+                    <Ionicons name="logo-google" size={17} color={COLORS.text} />
+                    <Text style={styles.socialText}>Google</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.socialButton} onPress={() => startSocialLogin('notion')} activeOpacity={0.85} disabled={isLoading}>
+                    <Ionicons name="document-text-outline" size={17} color={COLORS.text} />
+                    <Text style={styles.socialText}>Notion</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : null}
             <Text style={styles.helperText}>이메일로 바로 시작할 수 있습니다.</Text>
           </View>
 
@@ -82,8 +143,40 @@ export default function LoginScreen() {
             <TouchableOpacity onPress={() => setIsRegisterMode(!isRegisterMode)}><Text style={styles.signupLink}>{isRegisterMode ? '로그인' : '회원가입'}</Text></TouchableOpacity>
           </View>
         </ScrollView>
+        <OAuthCodeModal visible={Boolean(oauthProvider)} provider={oauthProvider} value={oauthCode} onChange={setOauthCode} onClose={() => setOauthProvider(null)} onSubmit={() => submitOAuthCode()} isLoading={isLoading} />
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+function parseOAuthUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const code = parsed.searchParams.get('code');
+    const provider = parsed.pathname.includes('notion') ? 'notion' : parsed.pathname.includes('google') ? 'google' : null;
+    return { provider, code };
+  } catch {
+    return null;
+  }
+}
+
+function OAuthCodeModal({ visible, provider, value, onChange, onClose, onSubmit, isLoading }) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.oauthModal}>
+          <Text style={styles.oauthTitle}>{provider === 'notion' ? 'Notion' : 'Google'} 로그인</Text>
+          <Text style={styles.oauthDesc}>브라우저 인증 후 앱으로 돌아오지 않으면 callback URL의 code 값을 붙여넣어 주세요.</Text>
+          <TextInput style={styles.oauthInput} placeholder="OAuth code" placeholderTextColor="#A0AEC0" value={value} onChangeText={onChange} autoCapitalize="none" />
+          <View style={styles.oauthActions}>
+            <TouchableOpacity style={styles.oauthCancelBtn} onPress={onClose}><Text style={styles.oauthCancelText}>취소</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.oauthConfirmBtn, (!value.trim() || isLoading) && styles.loginButtonDisabled]} onPress={onSubmit} disabled={!value.trim() || isLoading}>
+              <Text style={styles.oauthConfirmText}>{isLoading ? '처리 중' : '완료'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -122,8 +215,24 @@ const styles = StyleSheet.create({
   loginButton: { backgroundColor: COLORS.primary, borderRadius: 14, height: 52, alignItems: 'center', justifyContent: 'center', shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.24, shadowRadius: 8, elevation: 6 },
   loginButtonDisabled: { opacity: 0.7 },
   loginButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700', letterSpacing: 0 },
+  socialDivider: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 12 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: COLORS.border },
+  dividerText: { color: COLORS.subtext, fontSize: 11, fontWeight: '700' },
+  socialRow: { flexDirection: 'row', gap: 8 },
+  socialButton: { flex: 1, height: 44, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  socialText: { fontSize: 13, color: COLORS.text, fontWeight: '700' },
   helperText: { textAlign: 'center', color: COLORS.subtext, fontSize: 11, marginTop: 12 },
   signupRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 28 },
   signupPrompt: { color: COLORS.subtext, fontSize: 14 },
   signupLink: { color: COLORS.primary, fontSize: 14, fontWeight: '700' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center', padding: 28 },
+  oauthModal: { width: '100%', backgroundColor: COLORS.surface, borderRadius: 18, padding: 22 },
+  oauthTitle: { fontSize: 18, fontWeight: '800', color: COLORS.text, marginBottom: 8 },
+  oauthDesc: { fontSize: 12, color: COLORS.subtext, lineHeight: 18, marginBottom: 14 },
+  oauthInput: { height: 46, borderRadius: 12, backgroundColor: COLORS.inputBg, paddingHorizontal: 12, color: COLORS.text, marginBottom: 12 },
+  oauthActions: { flexDirection: 'row', gap: 8 },
+  oauthCancelBtn: { flex: 1, height: 44, borderRadius: 12, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  oauthCancelText: { color: COLORS.subtext, fontWeight: '700' },
+  oauthConfirmBtn: { flex: 1, height: 44, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
+  oauthConfirmText: { color: '#FFFFFF', fontWeight: '800' },
 });
