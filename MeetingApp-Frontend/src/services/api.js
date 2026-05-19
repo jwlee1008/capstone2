@@ -1,10 +1,16 @@
-const DEFAULT_BASE_URL = 'http://localhost:8080';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
+const DEFAULT_API_PORT = process.env.EXPO_PUBLIC_API_PORT || '8080';
+const LOCALHOST_BASE_URL = `http://localhost:${DEFAULT_API_PORT}`;
 const REQUEST_TIMEOUT_MS = 12000;
 const UPLOAD_TIMEOUT_MS = 120000;
 const TRANSCRIBE_TIMEOUT_MS = 12 * 60 * 1000;
+const ANALYZE_TIMEOUT_MS = 180000;
 
 let accessToken = null;
 let refreshToken = null;
+let authExpiredHandler = null;
 
 const storage = {
   get(key) {
@@ -26,9 +32,31 @@ const storage = {
   },
 };
 
+function getExpoHost() {
+  const hostUri =
+    Constants.expoConfig?.hostUri ||
+    Constants.manifest2?.extra?.expoClient?.hostUri ||
+    Constants.manifest?.debuggerHost;
+  const host = String(hostUri || '').split(':')[0];
+  if (!host || host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') return null;
+  return host;
+}
+
+function getDefaultBaseUrl() {
+  if (Platform.OS === 'web') return LOCALHOST_BASE_URL;
+  const expoHost = getExpoHost();
+  return expoHost ? `http://${expoHost}:${DEFAULT_API_PORT}` : LOCALHOST_BASE_URL;
+}
+
 const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL || storage.get('API_BASE_URL');
 export const API_BASE_URL =
-  configuredBaseUrl === 'same-origin' ? '' : configuredBaseUrl || DEFAULT_BASE_URL;
+  configuredBaseUrl === 'same-origin' ? '' : configuredBaseUrl || getDefaultBaseUrl();
+
+function createApiError(message, details = {}) {
+  const error = new Error(message);
+  Object.assign(error, details);
+  return error;
+}
 
 export function setTokens(tokens = {}) {
   accessToken = tokens.accessToken || null;
@@ -48,6 +76,10 @@ export function clearTokens() {
   refreshToken = null;
   storage.remove('accessToken');
   storage.remove('refreshToken');
+}
+
+export function setAuthExpiredHandler(handler) {
+  authExpiredHandler = typeof handler === 'function' ? handler : null;
 }
 
 async function parseResponse(response) {
@@ -77,11 +109,17 @@ async function request(path, options = {}, retry = true) {
     console.info('[api] request', options.method || 'GET', `${API_BASE_URL}${path}`);
     response = await fetch(`${API_BASE_URL}${path}`, { ...fetchOptions, headers, signal: controller.signal });
   } catch (error) {
-    console.error('[api] network error', options.method || 'GET', `${API_BASE_URL}${path}`, error);
+    console.log('[api] network error', options.method || 'GET', `${API_BASE_URL}${path}`, error?.message || error);
     if (error?.name === 'AbortError') {
-      throw new Error(`백엔드 응답이 없습니다. IntelliJ에서 서버가 켜져 있는지 확인해주세요. (${API_BASE_URL})`);
+      throw createApiError(`백엔드 응답이 없습니다. IntelliJ에서 서버가 켜져 있는지 확인해주세요. (${API_BASE_URL})`, {
+        isBackendUnavailable: true,
+        isNetworkError: true,
+      });
     }
-    throw new Error(`백엔드에 연결할 수 없습니다. IntelliJ 서버와 API 주소를 확인해주세요. (${API_BASE_URL})`);
+    throw createApiError(`백엔드에 연결할 수 없습니다. IntelliJ 서버와 API 주소를 확인해주세요. (${API_BASE_URL})`, {
+      isBackendUnavailable: true,
+      isNetworkError: true,
+    });
   } finally {
     clearTimeout(timeoutId);
   }
@@ -93,15 +131,27 @@ async function request(path, options = {}, retry = true) {
 
   const data = await parseResponse(response);
   if (!response.ok) {
-    const message = data?.message || data || `HTTP ${response.status}`;
-    console.error('[api] request failed', options.method || 'GET', `${API_BASE_URL}${path}`, response.status, data);
-    throw new Error(String(message));
+    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+      clearTokens();
+      authExpiredHandler?.();
+    }
+    const message = data?.error || data?.message || data?.errors || data || `HTTP ${response.status}`;
+    console.log('[api] request failed', options.method || 'GET', `${API_BASE_URL}${path}`, response.status, data);
+    throw createApiError(String(message), {
+      status: response.status,
+      isForbidden: response.status === 403,
+      isBackendUnavailable: response.status === 502 && String(message).startsWith('Cannot reach'),
+    });
   }
   return data;
 }
 
 function getAssetName(asset) {
   return asset?.name || asset?.file?.name || 'recording.m4a';
+}
+
+function getUploadAssetName(asset, fallback = 'upload.bin') {
+  return asset?.name || asset?.file?.name || fallback;
 }
 
 function inferAudioContentType(filename, fallback) {
@@ -114,6 +164,29 @@ function inferAudioContentType(filename, fallback) {
   if (ext === 'ogg') return 'audio/ogg';
   if (ext === 'webm') return 'audio/webm';
   return 'audio/mp4';
+}
+
+function inferImageContentType(filename, fallback) {
+  if (fallback) return fallback;
+  const ext = String(filename || '').split('.').pop()?.toLowerCase();
+  if (ext === 'png') return 'image/png';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'gif') return 'image/gif';
+  return 'image/jpeg';
+}
+
+async function getUploadBody(asset) {
+  if (asset?.file) return asset.file;
+  if (!asset?.uri) throw new Error('업로드할 파일을 찾을 수 없습니다.');
+  if (Platform.OS !== 'web') {
+    return {
+      uri: asset.uri,
+      name: getUploadAssetName(asset),
+      type: asset.mimeType || inferImageContentType(getUploadAssetName(asset)),
+    };
+  }
+  const response = await fetch(asset.uri);
+  return response.blob();
 }
 
 async function appendRecordingFile(formData, asset) {
@@ -129,7 +202,7 @@ async function appendRecordingFile(formData, asset) {
     throw new Error('업로드할 녹음 파일을 찾을 수 없습니다.');
   }
 
-  if (typeof File !== 'undefined') {
+  if (Platform.OS === 'web' && typeof File !== 'undefined') {
     const response = await fetch(asset.uri);
     const blob = await response.blob();
     formData.append('file', new File([blob], filename, { type: contentType }));
@@ -162,16 +235,6 @@ export const api = {
     return request('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
-    }).then((data) => {
-      setTokens(data);
-      return data;
-    });
-  },
-
-  googleLogin(code) {
-    return request('/api/oauth2/google/callback', {
-      method: 'POST',
-      body: JSON.stringify({ code }),
     }).then((data) => {
       setTokens(data);
       return data;
@@ -236,10 +299,6 @@ export const api = {
     });
   },
 
-  leaveWorkspace(workspaceId) {
-    return request(`/api/workspaces/${workspaceId}/members/me`, { method: 'DELETE' });
-  },
-
   searchUsers(query) {
     return request(`/api/user/search?q=${encodeURIComponent(query)}`);
   },
@@ -249,10 +308,10 @@ export const api = {
     return request(`/api/meetings${query}`);
   },
 
-  createMeeting({ workspaceId, title }) {
+  createMeeting({ workspaceId, title, description }) {
     return request('/api/meetings', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId, title }),
+      body: JSON.stringify({ workspaceId, title, description }),
     });
   },
 
@@ -272,6 +331,10 @@ export const api = {
     return request(`/api/recordings?meetingId=${meetingId}`);
   },
 
+  deleteRecording(recordingId) {
+    return request(`/api/recordings/${recordingId}`, { method: 'DELETE' });
+  },
+
   async uploadRecording(meetingId, asset) {
     const formData = new FormData();
     await appendRecordingFile(formData, asset);
@@ -280,12 +343,6 @@ export const api = {
       method: 'POST',
       body: formData,
       timeoutMs: UPLOAD_TIMEOUT_MS,
-    });
-  },
-
-  updateRecordingStatus(recordingId, status) {
-    return request(`/api/recordings/${recordingId}/status?status=${encodeURIComponent(status)}`, {
-      method: 'PATCH',
     });
   },
 
@@ -307,13 +364,14 @@ export const api = {
   saveSpeakerMappings(transcriptId, mappings) {
     return request(`/api/meetings/transcripts/${transcriptId}/speaker-mappings`, {
       method: 'PUT',
-      body: JSON.stringify(mappings),
+      body: JSON.stringify({ mappings }),
     });
   },
 
   analyzeTranscript(transcriptId) {
     return request(`/api/meetings/transcripts/${transcriptId}/gemini-analyze`, {
       method: 'POST',
+      timeoutMs: ANALYZE_TIMEOUT_MS,
     });
   },
 
@@ -357,13 +415,6 @@ export const api = {
     });
   },
 
-  updateEvent(eventId, updates) {
-    return request(`/api/events/${eventId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(updates),
-    });
-  },
-
   deleteEvent(eventId) {
     return request(`/api/events/${eventId}`, { method: 'DELETE' });
   },
@@ -382,6 +433,21 @@ export const api = {
     });
   },
 
+  getProfileImageUploadUrl(filename) {
+    return request(`/api/user/presigned-url?filename=${encodeURIComponent(filename)}`);
+  },
+
+  async uploadToPresignedUrl(presignedUrl, asset, fallbackName = 'upload.bin') {
+    const filename = getUploadAssetName(asset, fallbackName);
+    const contentType = inferImageContentType(filename, asset?.mimeType || asset?.file?.type);
+    const response = await fetch(presignedUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      body: await getUploadBody(asset),
+    });
+    if (!response.ok) throw new Error(`파일 업로드에 실패했습니다. HTTP ${response.status}`);
+  },
+
   updatePassword(payload) {
     return request('/api/user/password', {
       method: 'PATCH',
@@ -391,6 +457,10 @@ export const api = {
 
   deleteAccount() {
     return request('/api/user/account', { method: 'DELETE' });
+  },
+
+  getGoogleAuthUrl() {
+    return request('/api/oauth2/google/auth-url');
   },
 
   syncWorkspaceToNotion(workspaceId) {

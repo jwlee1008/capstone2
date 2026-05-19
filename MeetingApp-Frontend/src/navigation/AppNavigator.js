@@ -1,5 +1,5 @@
 ﻿import React from 'react';
-import { Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -56,11 +56,21 @@ function MainTabs() {
 }
 
 export default function AppNavigator() {
-  const { user } = useAppContext();
+  const { user, isRestoringSession } = useAppContext();
+  if (isRestoringSession) {
+    return (
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+        <Text style={styles.loadingText}>로그인 상태 확인 중</Text>
+      </View>
+    );
+  }
   return <NavigationContainer><Stack.Navigator screenOptions={{ headerShown: false }}>{user ? <Stack.Screen name="Main" component={MainTabs} /> : <Stack.Screen name="Login" component={LoginScreen} />}</Stack.Navigator></NavigationContainer>;
 }
 
 const styles = StyleSheet.create({
+  loadingScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.background },
+  loadingText: { marginTop: 12, fontSize: 13, color: COLORS.subtext, fontWeight: '600' },
   tabBarContainer: { flexDirection: 'row', backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 8, paddingHorizontal: 16, alignItems: 'flex-end', shadowColor: '#000', shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 8 },
   tabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 4 },
   centerTabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: Platform.OS === 'web' ? -18 : -24 },

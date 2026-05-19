@@ -1,7 +1,9 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
-import { api } from '../services/api';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { api, restoreTokens, setAuthExpiredHandler } from '../services/api';
 
 const AppContext = createContext(null);
+const LOCAL_USER_KEY = 'frontendLocalUser';
+const LOCAL_WORKSPACES_KEY = 'frontendLocalWorkspaces';
 
 function getWorkspaceId(raw) {
   return raw?.id || raw?.workspaceId || raw?.workspace?.id;
@@ -56,6 +58,13 @@ function mapMember(raw) {
   };
 }
 
+function mapParticipants(raw) {
+  const participants = raw?.participants || raw?.participantNames || raw?.participantEmails || raw?.attendees || raw?.members;
+  return normalizeList(participants)
+    .map((item) => (typeof item === 'string' ? item : item.name || item.email || item.userName))
+    .filter(Boolean);
+}
+
 function mapMeeting(raw, members = []) {
   return {
     id: raw.id,
@@ -64,7 +73,7 @@ function mapMeeting(raw, members = []) {
     description: raw.description || '',
     createdAt: raw.createdAt || new Date().toISOString(),
     createdBy: raw.createdBy,
-    participants: members.map((member) => member.name),
+    participants: mapParticipants(raw),
     sessions: raw.sessions || [],
     taskCount: raw.taskCount || raw.savedTaskCount || 0,
     eventCount: raw.eventCount || raw.savedEventCount || 0,
@@ -78,6 +87,35 @@ function secondsToTime(seconds = 0) {
   return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
+function getTranscriptId(transcript) {
+  return transcript?.id || transcript?.transcriptId;
+}
+
+function getSpeakerKey(label = 'SPEAKER_A') {
+  return String(label).replace('SPEAKER_', '');
+}
+
+function getDefaultSpeakerName(speakerKey) {
+  return `화자${speakerKey}`;
+}
+
+function isDefaultSpeakerName(speakerKey, name) {
+  return normalizeText(name) === getDefaultSpeakerName(speakerKey);
+}
+
+function getSpeakerMappingInfo(mapping) {
+  const label = mapping?.speakerLabel || mapping?.speakerKey;
+  const key = label ? getSpeakerKey(label) : '';
+  const name = normalizeText(mapping?.userName || mapping?.speakerName || mapping?.name);
+  if (!key || !name || isDefaultSpeakerName(key, name)) return null;
+  return {
+    key,
+    label,
+    name,
+    userId: mapping?.userId ?? null,
+  };
+}
+
 function splitSummary(summary) {
   if (!summary) return [];
   return summary
@@ -88,7 +126,7 @@ function splitSummary(summary) {
 
 function mapTranscriptSegment(segment, index) {
   const label = segment.speakerLabel || segment.speakerKey || 'SPEAKER_A';
-  const speakerKey = label.replace('SPEAKER_', '');
+  const speakerKey = getSpeakerKey(label);
   return {
     id: `${label}-${segment.sequence ?? index}`,
     speakerKey,
@@ -117,6 +155,34 @@ function mapTask(raw) {
   };
 }
 
+function normalizeDueDateForApi(dueDate) {
+  const value = normalizeText(dueDate);
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T00:00:00`;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return `${value}:00`;
+  return value;
+}
+
+function getTaskStatsFallback(tasks = []) {
+  return {
+    total: tasks.length,
+    todo: tasks.filter((task) => task.status === 'TODO').length,
+    inProgress: tasks.filter((task) => task.status === 'IN_PROGRESS').length,
+    done: tasks.filter((task) => task.status === 'DONE').length,
+  };
+}
+
+function normalizeTaskStats(stats, tasks = []) {
+  const fallback = getTaskStatsFallback(tasks);
+  if (!stats) return fallback;
+  return {
+    total: stats.total ?? stats.totalCount ?? fallback.total,
+    todo: stats.todo ?? stats.TODO ?? stats.todoCount ?? fallback.todo,
+    inProgress: stats.inProgress ?? stats.in_progress ?? stats.IN_PROGRESS ?? stats.inProgressCount ?? fallback.inProgress,
+    done: stats.done ?? stats.DONE ?? stats.doneCount ?? fallback.done,
+  };
+}
+
 function mapEvent(raw) {
   return {
     id: raw.id,
@@ -130,30 +196,146 @@ function mapEvent(raw) {
   };
 }
 
+function normalizeText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isEmailLike(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function getNameFromEmail(email) {
+  const localPart = normalizeText(email).split('@')[0];
+  return localPart || '사용자';
+}
+
+function readLocalJson(key, fallback) {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeLocalJson(key, value) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
+
+function removeLocalValue(key) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
+  } catch {}
+}
+
+function isBackendUnavailable(error) {
+  return Boolean(error?.isBackendUnavailable || error?.isNetworkError);
+}
+
+function getDisplayNameCache() {
+  return readLocalJson('displayNameByEmail', {});
+}
+
+function getCachedDisplayName(email) {
+  const normalizedEmail = normalizeText(email).toLowerCase();
+  if (!normalizedEmail) return '';
+  return normalizeText(getDisplayNameCache()[normalizedEmail]);
+}
+
+function cacheDisplayName(email, name) {
+  const normalizedEmail = normalizeText(email).toLowerCase();
+  const displayName = normalizeText(name);
+  if (!normalizedEmail || !displayName || displayName === '사용자' || isEmailLike(displayName)) return;
+  try {
+    const cache = getDisplayNameCache();
+    writeLocalJson('displayNameByEmail', { ...cache, [normalizedEmail]: displayName });
+  } catch {}
+}
+
+function getDisplayName(raw = {}, fallback = {}) {
+  const candidates = [
+    raw?.name,
+    raw?.displayName,
+    raw?.userName,
+    raw?.username,
+    raw?.nickname,
+    raw?.fullName,
+    raw?.profile?.name,
+    raw?.user?.name,
+    fallback.name,
+    fallback.displayName,
+    fallback.userName,
+    fallback.username,
+    fallback.nickname,
+    fallback.fullName,
+    fallback.profile?.name,
+    fallback.user?.name,
+    fallback.cachedName,
+  ];
+
+  return candidates
+    .map(normalizeText)
+    .find((name) => name && !isEmailLike(name)) || '사용자';
+}
+
 function mapUser(raw, fallback = {}) {
+  const email = raw?.email || raw?.profile?.email || raw?.user?.email || fallback.email || '';
+  const cachedName = fallback.cachedName || getCachedDisplayName(email);
+  const name = getDisplayName(raw, { ...fallback, cachedName });
   return {
-    id: raw?.id || raw?.userId || fallback.id || fallback.userId,
-    userId: raw?.id || raw?.userId || fallback.id || fallback.userId,
-    email: raw?.email || fallback.email || '',
-    name: raw?.name || fallback.name || raw?.email || fallback.email || '사용자',
-    profileImg: raw?.profileImg || fallback.profileImg,
+    id: raw?.id || raw?.userId || fallback.id || fallback.userId || (email ? `local-${email}` : 'local-user'),
+    userId: raw?.id || raw?.userId || fallback.id || fallback.userId || (email ? `local-${email}` : 'local-user'),
+    email,
+    name: name === '사용자' && email ? getNameFromEmail(email) : name,
+    profileImg: raw?.profileImg || raw?.profileImageUrl || fallback.profileImg || fallback.profileImageUrl,
     role: raw?.role || fallback.role || '서비스 운영',
     status: raw?.status || fallback.status,
   };
 }
 
-function buildSessionFromBackend({ transcript, summary, tasks = [], events = [], recordings = [] }) {
+function getLocalUser() {
+  const user = readLocalJson(LOCAL_USER_KEY, null);
+  return user ? mapUser(user) : null;
+}
+
+function saveLocalUser(user) {
+  if (!user) return;
+  writeLocalJson(LOCAL_USER_KEY, user);
+  cacheDisplayName(user.email, user.name);
+}
+
+function getLocalWorkspaces() {
+  return readLocalJson(LOCAL_WORKSPACES_KEY, []);
+}
+
+function saveLocalWorkspaces(workspaces) {
+  writeLocalJson(LOCAL_WORKSPACES_KEY, workspaces);
+}
+
+function buildSessionFromBackend({ transcript, summary, tasks = [], events = [], recordings = [], speakerMappings = [] }) {
   if (!transcript && !summary && tasks.length === 0 && events.length === 0 && recordings.length === 0) return null;
   const recording = recordings[0];
   const segments = (transcript?.segments || []).map(mapTranscriptSegment);
   const speakerMap = {};
+  normalizeList(speakerMappings).forEach((mapping) => {
+    const mapped = getSpeakerMappingInfo(mapping);
+    if (mapped) speakerMap[mapped.key] = mapped.name;
+  });
   segments.forEach((segment) => {
-    if (segment.speakerName) speakerMap[segment.speakerKey] = segment.speakerName;
+    if (
+      segment.speakerName
+      && !isDefaultSpeakerName(segment.speakerKey, segment.speakerName)
+      && !speakerMap[segment.speakerKey]
+    ) {
+      speakerMap[segment.speakerKey] = segment.speakerName;
+    }
   });
 
   return {
-    id: transcript?.id || recording?.recordingId || `s${Date.now()}`,
-    transcriptId: transcript?.id,
+    id: getTranscriptId(transcript) || recording?.recordingId || `s${Date.now()}`,
+    transcriptId: getTranscriptId(transcript),
     recordingId: transcript?.recordingId || recording?.recordingId,
     startedAt: transcript?.createdAt || recording?.createdAt || new Date().toISOString(),
     duration: recording?.durationSec ? `${Math.round(recording.durationSec / 60)}분` : null,
@@ -172,6 +354,38 @@ function buildSessionFromBackend({ transcript, summary, tasks = [], events = [],
   };
 }
 
+function mergeSessionSpeakerMap(nextSession, previousSession) {
+  if (!nextSession || !previousSession) return nextSession;
+  const previousMap = previousSession.speakerMap || {};
+  const mergedMap = { ...(nextSession.speakerMap || {}) };
+  Object.entries(previousMap).forEach(([key, name]) => {
+    if (!name || isDefaultSpeakerName(key, name)) return;
+    if (!mergedMap[key] || isDefaultSpeakerName(key, mergedMap[key])) mergedMap[key] = name;
+  });
+  const previousSegmentsByKey = new Map((previousSession.transcript || []).map((segment) => [String(segment.speakerKey), segment]));
+  return {
+    ...nextSession,
+    speakerMap: mergedMap,
+    transcript: (nextSession.transcript || []).map((segment) => {
+      const mappedName = mergedMap[segment.speakerKey];
+      if (!mappedName) return segment;
+      const previousSegment = previousSegmentsByKey.get(String(segment.speakerKey));
+      return {
+        ...segment,
+        speakerName: mappedName,
+        userId: previousSegment?.userId ?? segment.userId,
+      };
+    }),
+  };
+}
+
+function getSpeakerUserId(speaker) {
+  const rawId = speaker?.userId ?? speaker?.id;
+  if (rawId == null || rawId === '') return null;
+  const numericId = Number(rawId);
+  return Number.isFinite(numericId) ? numericId : null;
+}
+
 export function AppProvider({ children }) {
   const [user, setUser] = useState(null);
   const [workspace, setWorkspace] = useState(null);
@@ -181,8 +395,9 @@ export function AppProvider({ children }) {
   const [calendarTasks, setCalendarTasks] = useState([]);
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [taskStats, setTaskStats] = useState({ total: 0, todo: 0, inProgress: 0, done: 0 });
-  const [notionConnected, setNotionConnected] = useState(false);
+  const [calendarExported, setCalendarExported] = useState(false);
   const [isApiMode, setIsApiMode] = useState(false);
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
 
   const resetAppState = () => {
     setUser(null);
@@ -193,20 +408,60 @@ export function AppProvider({ children }) {
     setCalendarTasks([]);
     setCalendarEvents([]);
     setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
-    setNotionConnected(false);
+    setCalendarExported(false);
     setIsApiMode(false);
   };
+
+  const loadLocalWorkspaceBundle = (fallbackUser = user) => {
+    const localWorkspaces = getLocalWorkspaces().map((item) => mapWorkspace(item, item.members || [], item.name)).filter((item) => item?.id);
+    setWorkspaces(localWorkspaces);
+    setWorkspace((prev) => localWorkspaces.find((item) => String(item.id) === String(prev?.id)) || localWorkspaces[0] || null);
+    setMeetings([]);
+    setCalendarTasks([]);
+    setCalendarEvents([]);
+    setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+    if (fallbackUser) saveLocalUser(fallbackUser);
+    return localWorkspaces;
+  };
+
+  const createLocalWorkspace = (name, fallbackUser = user) => {
+    const members = fallbackUser ? [mapMember({ ...fallbackUser, role: 'owner' })] : [];
+    const localWorkspace = {
+      id: `local-workspace-${Date.now()}`,
+      name,
+      ownerId: fallbackUser?.id,
+      ownerName: fallbackUser?.name,
+      createdAt: new Date().toISOString(),
+      members,
+      invitedEmails: [],
+      localOnly: true,
+    };
+    const nextWorkspaces = [localWorkspace, ...getLocalWorkspaces().filter((item) => item.name !== name)];
+    saveLocalWorkspaces(nextWorkspaces);
+    setWorkspace(localWorkspace);
+    setWorkspaces(nextWorkspaces);
+    setMeetings([]);
+    setCalendarTasks([]);
+    setCalendarEvents([]);
+    setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+    return localWorkspace;
+  };
+
+  useEffect(() => {
+    setAuthExpiredHandler(resetAppState);
+    return () => setAuthExpiredHandler(null);
+  }, []);
 
   const getMeetingById = (id) => meetings.find((meeting) => String(meeting.id) === String(id));
 
   const loadInvitations = async () => {
-    const rows = await api.getInvitations().catch(() => []);
+    const rows = normalizeList(await api.getInvitations().catch(() => []));
     const mapped = rows.filter((item) => (item.status || 'PENDING') === 'PENDING').map(mapInvitation);
     setInvitations(mapped);
     return mapped;
   };
 
-  const loadWorkspaceBundle = async (targetWorkspace = null) => {
+  const loadWorkspaceBundle = async (targetWorkspace = null, fallbackUser = user) => {
     const backendWorkspaces = normalizeList(await api.getWorkspaces().catch(() => []));
     const explicitTarget = typeof targetWorkspace === 'object' ? targetWorkspace : null;
     const targetId = explicitTarget ? getWorkspaceId(explicitTarget) : targetWorkspace;
@@ -226,6 +481,7 @@ export function AppProvider({ children }) {
       setMeetings([]);
       setCalendarTasks([]);
       setCalendarEvents([]);
+      setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
       return;
     }
 
@@ -233,10 +489,10 @@ export function AppProvider({ children }) {
     try {
       members = normalizeList(await api.getWorkspaceMembers(selectedId)).map(mapMember);
     } catch (error) {
-      console.error('[workspace] failed to load members', selectedId, error);
+      console.log('[workspace] failed to load members', selectedId, error?.message || error);
       const mappedSelected = mapWorkspace(selected);
-      if (user && (!mappedSelected.ownerId || String(mappedSelected.ownerId) === String(user.id))) {
-        members = [mapMember({ ...user, role: 'owner' })];
+      if (fallbackUser && (!mappedSelected.ownerId || String(mappedSelected.ownerId) === String(fallbackUser.id))) {
+        members = [mapMember({ ...fallbackUser, role: 'owner' })];
       }
     }
     const mappedWorkspace = mapWorkspace(selected, members);
@@ -251,49 +507,115 @@ export function AppProvider({ children }) {
     setMeetings(backendMeetings.map((meeting) => mapMeeting(meeting, members)));
     setCalendarTasks(tasks.map(mapTask));
     setCalendarEvents(events.map(mapEvent));
-    if (stats) setTaskStats(stats);
+    setTaskStats(normalizeTaskStats(stats, tasks));
     return mappedWorkspace;
   };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const restoreSession = async () => {
+      const tokens = restoreTokens();
+      if (!tokens.accessToken && !tokens.refreshToken) {
+        if (isMounted) setIsRestoringSession(false);
+        return;
+      }
+
+      try {
+        setIsApiMode(true);
+        const profile = await api.getProfile();
+        if (!isMounted) return;
+        const restoredUser = mapUser(profile);
+        saveLocalUser(restoredUser);
+        setUser(restoredUser);
+        await loadWorkspaceBundle(null, restoredUser).catch(() => {
+          setWorkspace(null);
+          setWorkspaces([]);
+          setInvitations([]);
+          setMeetings([]);
+          setCalendarTasks([]);
+          setCalendarEvents([]);
+          setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+        });
+      } catch (error) {
+        if (isMounted) resetAppState();
+      } finally {
+        if (isMounted) setIsRestoringSession(false);
+      }
+    };
+
+    restoreSession();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const login = async ({ email, password, name }) => {
     try {
       const data = await api.login(email, password);
       setIsApiMode(true);
       const profile = await api.getProfile().catch(() => null);
-      setUser(mapUser(profile, { ...data, email, name: data?.name || name }));
+      const loggedInUser = mapUser(profile, { ...data, email, name: data?.name || name });
+      saveLocalUser(loggedInUser);
+      setUser(loggedInUser);
+      await loadWorkspaceBundle(null, loggedInUser).catch(() => {
+        setWorkspace(null);
+        setWorkspaces([]);
+        setInvitations([]);
+        setMeetings([]);
+        setCalendarTasks([]);
+        setCalendarEvents([]);
+        setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+      });
     } catch (error) {
       resetAppState();
       throw error;
-    }
-
-    try {
-      await loadWorkspaceBundle();
-    } catch {
-      setWorkspace(null);
-      setWorkspaces([]);
-      setInvitations([]);
-      setMeetings([]);
-      setCalendarTasks([]);
-      setCalendarEvents([]);
     }
   };
 
   const register = async ({ email, password, name }) => {
     try {
       await api.register(email, password, name);
-    } catch {
-      throw new Error('회원가입에 실패했습니다.');
+      cacheDisplayName(email, name);
+    } catch (error) {
+      throw error;
     }
   };
 
   const logout = async () => {
     if (isApiMode) await api.logout(user?.id).catch(() => {});
+    removeLocalValue(LOCAL_USER_KEY);
     resetAppState();
   };
 
   const updateUser = async (updates) => {
-    if (isApiMode && updates.name) await api.updateProfileName(updates.name).catch(() => null);
-    setUser((prev) => ({ ...prev, ...updates }));
+    if (isApiMode && updates.name) await api.updateProfileName(updates.name);
+    if (updates.name) cacheDisplayName(user?.email, updates.name);
+    setUser((prev) => {
+      const nextUser = { ...prev, ...updates };
+      saveLocalUser(nextUser);
+      return nextUser;
+    });
+  };
+
+  const updateProfileImageFromAsset = async (asset) => {
+    const filename = asset?.name || asset?.file?.name || `profile-${Date.now()}.jpg`;
+    const { presignedUrl } = await api.getProfileImageUploadUrl(filename);
+    if (!presignedUrl) throw new Error('프로필 이미지 업로드 URL을 받지 못했습니다.');
+    await api.uploadToPresignedUrl(presignedUrl, asset, filename);
+    const profileImageUrl = presignedUrl.split('?')[0];
+    await api.updateProfileImage(profileImageUrl);
+    setUser((prev) => ({ ...prev, profileImg: profileImageUrl }));
+    return profileImageUrl;
+  };
+
+  const changePassword = async ({ currentPassword, newPassword }) => {
+    await api.updatePassword({ currentPassword, newPassword });
+  };
+
+  const deleteAccount = async () => {
+    await api.deleteAccount();
+    resetAppState();
   };
 
   const selectWorkspace = async (workspaceId) => {
@@ -318,6 +640,19 @@ export function AppProvider({ children }) {
     return created;
   };
 
+  const deleteWorkspace = async (workspaceId) => {
+    await api.deleteWorkspace(workspaceId);
+    setWorkspaces((prev) => prev.filter((item) => String(item.id) !== String(workspaceId)));
+    if (String(workspace?.id) === String(workspaceId)) {
+      setWorkspace(null);
+      setMeetings([]);
+      setCalendarTasks([]);
+      setCalendarEvents([]);
+      setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
+      await loadWorkspaceBundle().catch(() => null);
+    }
+  };
+
   const acceptInvitation = async (invitationId) => {
     const accepted = invitations.find((item) => String(item.id) === String(invitationId));
     await api.acceptInvitation(invitationId);
@@ -334,16 +669,33 @@ export function AppProvider({ children }) {
     if (!email.trim()) return;
     if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
     const normalizedEmail = email.trim().toLowerCase();
+    const applyLocalInvite = () => {
+      setWorkspace((prev) => ({
+        ...prev,
+        invitedEmails: Array.from(new Set([...(prev?.invitedEmails || []), normalizedEmail])),
+      }));
+      setWorkspaces((prev) => prev.map((item) => (
+        String(item.id) === String(workspace.id)
+          ? { ...item, invitedEmails: Array.from(new Set([...(item.invitedEmails || []), normalizedEmail])) }
+          : item
+      )));
+    };
     await api.inviteMember(workspace.id, normalizedEmail);
-    setWorkspace((prev) => ({
-      ...prev,
-      invitedEmails: Array.from(new Set([...(prev?.invitedEmails || []), normalizedEmail])),
-    }));
+    applyLocalInvite();
+  };
+
+  const searchUsers = async (query) => {
+    if (!query.trim()) return [];
+    return normalizeList(await api.searchUsers(query.trim())).map(mapUser);
   };
 
   const addMeeting = async (meetingData) => {
     if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
-    const created = await api.createMeeting({ workspaceId: workspace.id, title: meetingData.name });
+    const created = await api.createMeeting({
+      workspaceId: workspace.id,
+      title: meetingData.name,
+      description: meetingData.description,
+    });
     const mapped = mapMeeting(created, workspace.members || []);
     setMeetings((prev) => [mapped, ...prev]);
     return mapped;
@@ -352,6 +704,15 @@ export function AppProvider({ children }) {
   const deleteMeeting = async (meetingId) => {
     await api.deleteMeeting(meetingId);
     setMeetings((prev) => prev.filter((meeting) => String(meeting.id) !== String(meetingId)));
+  };
+
+  const deleteRecording = async (meetingId, recordingId) => {
+    await api.deleteRecording(recordingId);
+    setMeetings((prev) => prev.map((meeting) => {
+      if (String(meeting.id) !== String(meetingId)) return meeting;
+      const sessions = (meeting.sessions || []).filter((session) => String(session.recordingId) !== String(recordingId));
+      return { ...meeting, sessions };
+    }));
   };
 
   const refreshMeetingData = async (meetingId) => {
@@ -363,19 +724,28 @@ export function AppProvider({ children }) {
       api.getEvents({ workspaceId: workspace?.id }).catch(() => []),
       api.getRecordings(meetingId).catch(() => []),
     ]);
-    const meetingEvents = events.filter((event) => !event.meetingId || String(event.meetingId) === String(meetingId));
-    const session = buildSessionFromBackend({ transcript, summary, tasks, events: meetingEvents, recordings });
-    setMeetings((prev) => prev.map((meeting) => (
-      String(meeting.id) === String(meetingId)
-        ? {
-          ...meeting,
-          ...mapMeeting(meetingDetail || meeting, workspace?.members || []),
-          sessions: session ? [session] : meeting.sessions,
-          taskCount: summary?.taskCount ?? tasks.length,
-          eventCount: summary?.eventCount ?? meetingEvents.length,
-        }
-        : meeting
-    )));
+    const transcriptId = getTranscriptId(transcript);
+    const speakerMappings = transcriptId
+      ? await api.getSpeakerMappings(transcriptId).catch(() => [])
+      : [];
+    const meetingEvents = events.filter((event) => String(event.meetingId) === String(meetingId));
+    const session = buildSessionFromBackend({ transcript, summary, tasks, events: meetingEvents, recordings, speakerMappings });
+    setMeetings((prev) => prev.map((meeting) => {
+      if (String(meeting.id) !== String(meetingId)) return meeting;
+      const previousSession = session
+        ? (meeting.sessions || []).find((item) => (
+          String(item.id) === String(session.id)
+          || String(item.transcriptId) === String(session.transcriptId)
+        )) || meeting.sessions?.[0]
+        : null;
+      return {
+        ...meeting,
+        ...mapMeeting(meetingDetail || meeting, workspace?.members || []),
+        sessions: session ? [mergeSessionSpeakerMap(session, previousSession)] : meeting.sessions,
+        taskCount: summary?.taskCount ?? tasks.length,
+        eventCount: summary?.eventCount ?? meetingEvents.length,
+      };
+    }));
     setCalendarTasks((prev) => {
       const others = prev.filter((task) => String(task.meetingId) !== String(meetingId));
       return [...tasks.map(mapTask), ...others];
@@ -392,28 +762,87 @@ export function AppProvider({ children }) {
     return transcribe;
   };
 
-  const updateSpeakerName = async (meetingId, sessionId, speakerKey, name) => {
+  const updateSpeakerName = async (meetingId, sessionId, speakerKey, speaker) => {
     const meeting = getMeetingById(meetingId);
     const session = meeting?.sessions?.find((item) => String(item.id) === String(sessionId)) || meeting?.sessions?.[0];
-    const nextMap = { ...(session?.speakerMap || {}), [speakerKey]: name };
+    const selectedSpeaker = typeof speaker === 'string' ? { name: speaker } : speaker || {};
+    const selectedName = normalizeText(selectedSpeaker.name || selectedSpeaker.userName || selectedSpeaker.email);
+    if (!selectedName) throw new Error('저장할 화자 이름을 선택하거나 입력해주세요.');
+    const selectedUserId = getSpeakerUserId(selectedSpeaker);
+    const nextMap = { ...(session?.speakerMap || {}), [speakerKey]: selectedName };
+    const applySpeakerMap = ({ savedMap = {}, savedUserIds = {}, localOnly = false } = {}) => {
+      const appliedMap = Object.entries({ ...nextMap, ...savedMap, [speakerKey]: savedMap[speakerKey] || selectedName })
+        .reduce((acc, [key, name]) => {
+          if (name && !isDefaultSpeakerName(key, name)) acc[key] = name;
+          return acc;
+        }, {});
+      const appliedUserId = savedUserIds[speakerKey] ?? selectedUserId;
+      setMeetings((prev) => prev.map((item) => {
+        if (String(item.id) !== String(meetingId)) return item;
+        return {
+          ...item,
+          sessions: (item.sessions || []).map((sessionItem) => {
+            const isTarget = String(sessionItem.id) === String(session.id)
+              || String(sessionItem.transcriptId) === String(session.transcriptId);
+            if (!isTarget) return sessionItem;
+            return {
+              ...sessionItem,
+              speakerMap: appliedMap,
+              speakerMapLocalOnly: localOnly || sessionItem.speakerMapLocalOnly,
+              transcript: (sessionItem.transcript || []).map((segment) => (
+                String(segment.speakerKey) === String(speakerKey)
+                  ? { ...segment, speakerName: appliedMap[speakerKey], userId: appliedUserId }
+                  : segment
+              )),
+            };
+          }),
+        };
+      }));
+      return { localOnly, speakerMap: appliedMap };
+    };
 
     if (session?.transcriptId) {
       const mappings = Object.entries(nextMap).map(([key, userName]) => {
         const segment = session.transcript.find((item) => item.speakerKey === key);
-        const member = workspace?.members?.find((item) => item.name === userName);
+        const member = String(key) === String(speakerKey) && selectedUserId
+          ? { userId: selectedUserId }
+          : workspace?.members?.find((item) => item.name === userName || item.email === userName);
         return {
           speakerLabel: segment?.speakerLabel || `SPEAKER_${key}`,
           userName,
-          userId: member?.userId || null,
+          userId: getSpeakerUserId(member),
         };
+      }).filter((mapping) => normalizeText(mapping.userName) && !isDefaultSpeakerName(getSpeakerKey(mapping.speakerLabel), mapping.userName));
+      const apiMappings = mappings.filter((mapping) => mapping.userId != null);
+      const selectedMapping = mappings.find((mapping) => String(getSpeakerKey(mapping.speakerLabel)) === String(speakerKey));
+      if (!selectedMapping?.userId) {
+        return applySpeakerMap({ localOnly: true });
+      }
+      let savedMappings = [];
+      try {
+        savedMappings = normalizeList(await api.saveSpeakerMappings(session.transcriptId, apiMappings));
+      } catch (error) {
+        if (error?.isForbidden || error?.status === 403) {
+          return applySpeakerMap({ localOnly: true });
+        }
+        throw error;
+      }
+      const savedMap = {};
+      const savedUserIds = {};
+      savedMappings.forEach((mapping) => {
+        const mapped = getSpeakerMappingInfo(mapping);
+        if (!mapped) return;
+        savedMap[mapped.key] = mapped.name;
+        savedUserIds[mapped.key] = mapped.userId;
       });
-      await api.saveSpeakerMappings(session.transcriptId, mappings);
-      await api.analyzeTranscript(session.transcriptId);
-      await refreshMeetingData(meetingId);
-      return;
+      const result = applySpeakerMap({ savedMap, savedUserIds });
+      api.analyzeTranscript(session.transcriptId)
+        .then(() => refreshMeetingData(meetingId))
+        .catch((error) => console.log('[speaker] failed to refresh analysis', error?.message || error));
+      return result;
     }
 
-    throw new Error('저장할 대화록이 없습니다.');
+    return applySpeakerMap({ localOnly: true });
   };
 
   const addCalendarTask = async (task) => {
@@ -422,23 +851,77 @@ export function AppProvider({ children }) {
       description: task.description,
       assigneeId: task.assigneeId || null,
       assigneeName: task.assignee || task.assigneeName,
-      dueDate: task.dueDate || null,
+      dueDate: normalizeDueDateForApi(task.dueDate),
       workspaceId: task.workspaceId || workspace?.id || null,
       meetingId: task.meetingId || null,
     });
-    setCalendarTasks((prev) => [mapTask(created), ...prev]);
+    const mapped = mapTask(created);
+    setCalendarTasks((prev) => [mapped, ...prev]);
+    if (mapped.meetingId) {
+      setMeetings((prev) => prev.map((meeting) => {
+        if (String(meeting.id) !== String(mapped.meetingId)) return meeting;
+        const sessions = meeting.sessions?.length
+          ? meeting.sessions.map((session, index) => (
+            index === 0
+              ? { ...session, tasks: [mapped, ...(session.tasks || [])], taskCount: (session.taskCount || session.tasks?.length || 0) + 1 }
+              : session
+          ))
+          : meeting.sessions;
+        return { ...meeting, sessions, taskCount: (meeting.taskCount || 0) + 1 };
+      }));
+    }
     return created;
   };
 
   const updateCalendarTask = async (taskId, updates) => {
-    const updated = await api.updateTask(taskId, updates);
-    setCalendarTasks((prev) => prev.map((task) => String(task.id) === String(taskId) ? mapTask(updated) : task));
-    return updated;
+    const normalizedUpdates = updates.statusCode && !updates.status ? { ...updates, status: updates.statusCode } : updates;
+    const apiUpdates = {
+      ...normalizedUpdates,
+      dueDate: normalizeDueDateForApi(normalizedUpdates.dueDate),
+    };
+    delete apiUpdates.statusCode;
+    const updated = await api.updateTask(taskId, apiUpdates);
+    const currentTask = calendarTasks.find((task) => String(task.id) === String(taskId));
+    const backendTask = updated && typeof updated === 'object' ? updated : {};
+    const nextTask = currentTask ? mapTask({
+      id: currentTask.id,
+      title: currentTask.title,
+      description: currentTask.description,
+      assigneeId: currentTask.assigneeId,
+      assigneeName: currentTask.assigneeName || currentTask.assignee,
+      dueDate: currentTask.dueDate,
+      status: currentTask.statusCode,
+      meetingId: currentTask.meetingId,
+      workspaceId: currentTask.workspaceId,
+      ...normalizedUpdates,
+      ...backendTask,
+    }) : updated;
+    setCalendarTasks((prev) => prev.map((task) => {
+      if (String(task.id) !== String(taskId)) return task;
+      return nextTask || task;
+    }));
+    if (nextTask?.id) {
+      setMeetings((prev) => prev.map((meeting) => ({
+        ...meeting,
+        sessions: (meeting.sessions || []).map((session) => ({
+          ...session,
+          tasks: (session.tasks || []).map((task) => (String(task.id) === String(taskId) ? nextTask : task)),
+        })),
+      })));
+    }
+    return nextTask || updated;
   };
 
   const deleteCalendarTask = async (taskId) => {
     await api.deleteTask(taskId);
     setCalendarTasks((prev) => prev.filter((task) => String(task.id) !== String(taskId)));
+    setMeetings((prev) => prev.map((meeting) => ({
+      ...meeting,
+      sessions: (meeting.sessions || []).map((session) => ({
+        ...session,
+        tasks: (session.tasks || []).filter((task) => String(task.id) !== String(taskId)),
+      })),
+    })));
   };
 
   const addCalendarEvent = async (event) => {
@@ -458,10 +941,10 @@ export function AppProvider({ children }) {
     setCalendarEvents((prev) => prev.filter((event) => String(event.id) !== String(eventId)));
   };
 
-  const syncNotionCalendar = async () => {
+  const syncGoogleCalendar = async () => {
     if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
     await api.syncWorkspaceToNotion(workspace.id);
-    setNotionConnected(true);
+    setCalendarExported(true);
   };
 
   const value = useMemo(() => ({
@@ -473,19 +956,26 @@ export function AppProvider({ children }) {
     calendarTasks,
     calendarEvents,
     taskStats,
-    notionConnected,
+    calendarExported,
     isApiMode,
+    isRestoringSession,
     login,
     register,
     logout,
     updateUser,
+    updateProfileImageFromAsset,
+    changePassword,
+    deleteAccount,
     selectWorkspace,
     createWorkspace,
+    deleteWorkspace,
     acceptInvitation,
     declineInvitation,
     inviteMember,
+    searchUsers,
     addMeeting,
     deleteMeeting,
+    deleteRecording,
     refreshMeetingData,
     uploadRecordingAndTranscribe,
     updateSpeakerName,
@@ -494,10 +984,10 @@ export function AppProvider({ children }) {
     deleteCalendarTask,
     addCalendarEvent,
     deleteCalendarEvent,
-    setNotionConnected,
-    syncNotionCalendar,
+    setCalendarExported,
+    syncGoogleCalendar,
     getMeetingById,
-  }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, notionConnected, isApiMode]);
+  }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, calendarExported, isApiMode, isRestoringSession]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
