@@ -3,6 +3,7 @@
     "name": "MeetFlow",
     "slug": "meetflow",
     "version": "1.0.0",
+    "scheme": "meetflow",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "assetBundlePatterns": ["**/*"],

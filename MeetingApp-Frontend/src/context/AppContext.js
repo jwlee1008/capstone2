@@ -499,6 +499,19 @@ export function AppProvider({ children }) {
     setCalendarEvents((prev) => prev.filter((event) => String(event.id) !== String(eventId)));
   };
 
+  const startNotionCalendarLink = async () => {
+    const data = await api.getNotionLinkAuthUrl();
+    if (!data?.authUrl) throw new Error('Notion 인증 URL을 받지 못했습니다.');
+    return data;
+  };
+
+  const completeNotionCalendarLink = async (code) => {
+    if (!code) throw new Error('Notion 인증 코드가 없습니다.');
+    const linked = await api.linkNotionAccount(code);
+    setNotionConnected(true);
+    return linked;
+  };
+
   const syncNotionCalendar = async () => {
     if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
     await api.syncWorkspaceToNotion(workspace.id);
@@ -535,6 +548,8 @@ export function AppProvider({ children }) {
     deleteCalendarTask,
     addCalendarEvent,
     deleteCalendarEvent,
+    startNotionCalendarLink,
+    completeNotionCalendarLink,
     setNotionConnected,
     syncNotionCalendar,
     getMeetingById,

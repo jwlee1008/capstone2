@@ -393,6 +393,24 @@ export const api = {
     return request('/api/user/account', { method: 'DELETE' });
   },
 
+  getNotionLinkAuthUrl() {
+    return request('/api/oauth2/notion/link/auth-url');
+  },
+
+  linkNotionAccount(code) {
+    return request('/api/oauth2/notion/link', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+  },
+
+  setNotionCalendarDatabase(payload) {
+    return request('/api/oauth2/notion/calendar-database', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
   syncWorkspaceToNotion(workspaceId) {
     return request(`/api/calendar/workspaces/${workspaceId}/notion-sync`, {
       method: 'POST',
