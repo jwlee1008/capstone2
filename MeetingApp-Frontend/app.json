@@ -6,9 +6,14 @@
     "scheme": "meetflow",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "web": {
       "bundler": "metro"
-    }
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }

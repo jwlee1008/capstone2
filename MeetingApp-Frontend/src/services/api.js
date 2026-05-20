@@ -1,3 +1,5 @@
+import * as SecureStore from 'expo-secure-store';
+
 const DEFAULT_BASE_URL = 'http://localhost:8080';
 const REQUEST_TIMEOUT_MS = 12000;
 const UPLOAD_TIMEOUT_MS = 120000;
@@ -5,41 +7,84 @@ const TRANSCRIBE_TIMEOUT_MS = 12 * 60 * 1000;
 
 let accessToken = null;
 let refreshToken = null;
+const memoryStorage = {};
+
+function getWebStorage() {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+async function canUseSecureStore() {
+  try {
+    return await SecureStore.isAvailableAsync();
+  } catch {
+    return false;
+  }
+}
 
 const storage = {
-  get(key) {
+  getSync(key) {
     try {
-      return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+      return getWebStorage()?.getItem(key) || memoryStorage[key] || null;
     } catch {
-      return null;
+      return memoryStorage[key] || null;
     }
   },
+  async get(key) {
+    const webValue = this.getSync(key);
+    if (webValue) return webValue;
+    if (await canUseSecureStore()) {
+      try {
+        const secureValue = await SecureStore.getItemAsync(key);
+        if (secureValue) memoryStorage[key] = secureValue;
+        return secureValue;
+      } catch {
+        return null;
+      }
+    }
+    return memoryStorage[key] || null;
+  },
   set(key, value) {
+    memoryStorage[key] = value;
     try {
-      if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
+      getWebStorage()?.setItem(key, value);
     } catch {}
+    canUseSecureStore().then((available) => {
+      if (available) SecureStore.setItemAsync(key, value).catch(() => {});
+    });
   },
   remove(key) {
+    delete memoryStorage[key];
     try {
-      if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
+      getWebStorage()?.removeItem(key);
     } catch {}
+    canUseSecureStore().then((available) => {
+      if (available) SecureStore.deleteItemAsync(key).catch(() => {});
+    });
   },
 };
 
-const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL || storage.get('API_BASE_URL');
+const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL || storage.getSync('API_BASE_URL');
 export const API_BASE_URL =
   configuredBaseUrl === 'same-origin' ? '' : configuredBaseUrl || DEFAULT_BASE_URL;
 
 export function setTokens(tokens = {}) {
-  accessToken = tokens.accessToken || null;
-  refreshToken = tokens.refreshToken || null;
+  if (Object.prototype.hasOwnProperty.call(tokens, 'accessToken')) {
+    accessToken = tokens.accessToken || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(tokens, 'refreshToken')) {
+    refreshToken = tokens.refreshToken || null;
+  }
   if (accessToken) storage.set('accessToken', accessToken);
   if (refreshToken) storage.set('refreshToken', refreshToken);
 }
 
-export function restoreTokens() {
-  accessToken = accessToken || storage.get('accessToken');
-  refreshToken = refreshToken || storage.get('refreshToken');
+export async function restoreTokens() {
+  accessToken = accessToken || await storage.get('accessToken');
+  refreshToken = refreshToken || await storage.get('refreshToken');
   return { accessToken, refreshToken };
 }
 
@@ -61,7 +106,7 @@ async function parseResponse(response) {
 }
 
 async function request(path, options = {}, retry = true) {
-  restoreTokens();
+  await restoreTokens();
   const { timeoutMs, ...fetchOptions } = options;
   const isFormData = options.body instanceof FormData;
   const controller = new AbortController();

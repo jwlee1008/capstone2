@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { AppState } from 'react-native';
 import { api, clearTokens, restoreTokens } from '../services/api';
 
 const AppContext = createContext(null);
@@ -30,6 +31,17 @@ function normalizeBackendDateTime(value) {
 
 function getSummaryTaskCount(summary, fallback = 0) {
   return summary?.taskCount ?? summary?.taskStats?.total ?? fallback;
+}
+
+function countTaskStats(tasks = []) {
+  return tasks.reduce((acc, task) => {
+    const status = task.statusCode || task.status || 'TODO';
+    acc.total += 1;
+    if (status === 'DONE') acc.done += 1;
+    else if (status === 'IN_PROGRESS') acc.inProgress += 1;
+    else acc.todo += 1;
+    return acc;
+  }, { total: 0, todo: 0, inProgress: 0, done: 0 });
 }
 
 function mapWorkspace(raw, members = [], fallbackName = '') {
@@ -260,11 +272,12 @@ export function AppProvider({ children }) {
       api.getTaskStats({ workspaceId: selectedId }).catch(() => null),
     ]);
 
+    const mappedTasks = tasks.map(mapTask);
     setWorkspace(mappedWorkspace);
     setMeetings(backendMeetings.map((meeting) => mapMeeting(meeting, members)));
-    setCalendarTasks(tasks.map(mapTask));
+    setCalendarTasks(mappedTasks);
     setCalendarEvents(events.map(mapEvent));
-    if (stats) setTaskStats(stats);
+    setTaskStats(stats || countTaskStats(mappedTasks));
     return mappedWorkspace;
   };
 
@@ -272,7 +285,7 @@ export function AppProvider({ children }) {
     let isMounted = true;
 
     const restoreSession = async () => {
-      const tokens = restoreTokens();
+      const tokens = await restoreTokens();
       if (!tokens.accessToken) return;
 
       try {
@@ -292,6 +305,16 @@ export function AppProvider({ children }) {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        loadWorkspaceBundle(workspace?.id).catch(() => null);
+      }
+    });
+    return () => subscription.remove();
+  }, [user?.id, workspace?.id]);
 
   const login = async ({ email, password, name }) => {
     try {
@@ -339,6 +362,11 @@ export function AppProvider({ children }) {
     if (!selected) throw new Error('워크스페이스를 찾을 수 없습니다.');
     setWorkspace((prev) => (prev?.id === selected.id ? prev : mapWorkspace(selected, selected.members || [])));
     await loadWorkspaceBundle(selected.id).catch(() => null);
+  };
+
+  const refreshWorkspaceData = async () => {
+    if (!user?.id) return null;
+    return loadWorkspaceBundle(workspace?.id || null);
   };
 
   const createWorkspace = async (name) => {
@@ -416,7 +444,9 @@ export function AppProvider({ children }) {
     )));
     setCalendarTasks((prev) => {
       const others = prev.filter((task) => String(task.meetingId) !== String(meetingId));
-      return [...tasks.map(mapTask), ...others];
+      const nextTasks = [...tasks.map(mapTask), ...others];
+      setTaskStats(countTaskStats(nextTasks));
+      return nextTasks;
     });
     setCalendarEvents(events.map(mapEvent));
     return session;
@@ -425,9 +455,12 @@ export function AppProvider({ children }) {
   const uploadRecordingAndTranscribe = async (meetingId, asset) => {
     const recording = await api.uploadRecording(meetingId, asset);
     const recordingId = recording.recordingId || recording.id;
-    const transcribe = await api.transcribe(meetingId, recordingId);
-    await refreshMeetingData(meetingId);
-    return transcribe;
+    await refreshMeetingData(meetingId).catch(() => null);
+    try {
+      return await api.transcribe(meetingId, recordingId);
+    } finally {
+      await refreshMeetingData(meetingId).catch(() => null);
+    }
   };
 
   const updateSpeakerName = async (meetingId, sessionId, speakerKey, name) => {
@@ -464,7 +497,11 @@ export function AppProvider({ children }) {
       workspaceId: task.workspaceId || workspace?.id || null,
       meetingId: task.meetingId || null,
     });
-    setCalendarTasks((prev) => [mapTask(created), ...prev]);
+    setCalendarTasks((prev) => {
+      const nextTasks = [mapTask(created), ...prev];
+      setTaskStats(countTaskStats(nextTasks));
+      return nextTasks;
+    });
     return created;
   };
 
@@ -473,13 +510,21 @@ export function AppProvider({ children }) {
       ...updates,
       dueDate: updates.dueDate === undefined ? undefined : normalizeBackendDateTime(updates.dueDate),
     });
-    setCalendarTasks((prev) => prev.map((task) => String(task.id) === String(taskId) ? mapTask(updated) : task));
+    setCalendarTasks((prev) => {
+      const nextTasks = prev.map((task) => String(task.id) === String(taskId) ? mapTask(updated) : task);
+      setTaskStats(countTaskStats(nextTasks));
+      return nextTasks;
+    });
     return updated;
   };
 
   const deleteCalendarTask = async (taskId) => {
     await api.deleteTask(taskId);
-    setCalendarTasks((prev) => prev.filter((task) => String(task.id) !== String(taskId)));
+    setCalendarTasks((prev) => {
+      const nextTasks = prev.filter((task) => String(task.id) !== String(taskId));
+      setTaskStats(countTaskStats(nextTasks));
+      return nextTasks;
+    });
   };
 
   const addCalendarEvent = async (event) => {
@@ -534,6 +579,7 @@ export function AppProvider({ children }) {
     logout,
     updateUser,
     selectWorkspace,
+    refreshWorkspaceData,
     createWorkspace,
     acceptInvitation,
     declineInvitation,

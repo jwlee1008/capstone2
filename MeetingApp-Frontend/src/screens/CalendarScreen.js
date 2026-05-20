@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Linking, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAppContext } from '../context/AppContext';
 import { COLORS } from '../theme';
 
@@ -34,6 +35,8 @@ export default function CalendarScreen() {
     calendarEvents,
     taskStats,
     notionConnected,
+    workspace,
+    refreshWorkspaceData,
     startNotionCalendarLink,
     completeNotionCalendarLink,
     syncNotionCalendar,
@@ -45,11 +48,23 @@ export default function CalendarScreen() {
   const [eventForm, setEventForm] = useState({ title: '', date: '', startTime: '10:00', endTime: '11:00' });
   const [notionAction, setNotionAction] = useState(null);
 
+  const localTaskStats = useMemo(() => calendarTasks.reduce((acc, task) => {
+    acc.total += 1;
+    if (task.statusCode === 'DONE') acc.done += 1;
+    else if (task.statusCode === 'IN_PROGRESS') acc.inProgress += 1;
+    else acc.todo += 1;
+    return acc;
+  }, { total: 0, todo: 0, inProgress: 0, done: 0 }), [calendarTasks]);
+
   const groupedTasks = useMemo(() => calendarTasks.reduce((acc, task) => {
     const key = task.dueDate || '마감일 미정';
     acc[key] = [...(acc[key] || []), task];
     return acc;
   }, {}), [calendarTasks]);
+
+  useFocusEffect(useCallback(() => {
+    refreshWorkspaceData?.().catch(() => {});
+  }, [workspace?.id]));
 
   const completeNotionFromUrl = useCallback(async (url) => {
     const error = getUrlParam(url, 'error');
@@ -200,10 +215,10 @@ export default function CalendarScreen() {
         </View>
 
         <View style={styles.statsRow}>
-          <Stat label="전체" value={taskStats.total || calendarTasks.length} />
-          <Stat label="TODO" value={taskStats.todo || calendarTasks.filter((task) => task.statusCode === 'TODO').length} />
-          <Stat label="진행" value={taskStats.inProgress || calendarTasks.filter((task) => task.statusCode === 'IN_PROGRESS').length} />
-          <Stat label="완료" value={taskStats.done || calendarTasks.filter((task) => task.statusCode === 'DONE').length} />
+          <Stat label="전체" value={localTaskStats.total || taskStats.total || 0} />
+          <Stat label="TODO" value={localTaskStats.todo} />
+          <Stat label="진행" value={localTaskStats.inProgress} />
+          <Stat label="완료" value={localTaskStats.done} />
         </View>
 
         <Text style={styles.sectionTitle}>일정</Text>

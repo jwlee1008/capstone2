@@ -1,8 +1,9 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAppContext } from '../context/AppContext';
 import { COLORS } from '../theme';
 
@@ -20,9 +21,17 @@ export default function MeetingDetailScreen({ navigation, route }) {
   const latestSession = meeting?.sessions?.[0];
   const speakerKeys = useMemo(() => latestSession ? Array.from(new Set(latestSession.transcript.map((s) => s.speakerKey))) : [], [latestSession]);
 
-  useEffect(() => {
+  const refreshCurrentMeeting = useCallback(() => {
     refreshMeetingData(meetingId).catch(() => {});
   }, [meetingId]);
+
+  useFocusEffect(refreshCurrentMeeting);
+
+  useEffect(() => {
+    if (!isUploading && (!latestSession || latestSession.processStatus === 'done')) return undefined;
+    const intervalId = setInterval(refreshCurrentMeeting, 5000);
+    return () => clearInterval(intervalId);
+  }, [isUploading, latestSession?.processStatus, refreshCurrentMeeting]);
 
   if (!meeting) return <SafeAreaView style={styles.safeArea}><View style={styles.errorContainer}><Text style={styles.errorText}>회의를 찾을 수 없습니다.</Text><TouchableOpacity onPress={() => navigation.goBack()}><Text style={styles.goBackText}>돌아가기</Text></TouchableOpacity></View></SafeAreaView>;
 
@@ -43,6 +52,7 @@ export default function MeetingDetailScreen({ navigation, route }) {
   const registerTask = async (task) => {
     try {
       await addCalendarTask({ ...task, meetingId: task.meetingId || meeting.id, workspaceId: task.workspaceId || meeting.workspaceId || workspace?.id });
+      await refreshMeetingData(meeting.id).catch(() => null);
       Alert.alert('등록 완료', '인앱 캘린더에 할일이 추가되었습니다.');
     } catch (error) {
       Alert.alert('등록 실패', error?.message || '할일을 등록하지 못했습니다.');

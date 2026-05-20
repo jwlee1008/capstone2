@@ -12,7 +12,6 @@ export default function AddMeetingScreen({ navigation }) {
   const [meetingName, setMeetingName] = useState('');
   const [inviteInput, setInviteInput] = useState('');
   const [inviteEmails, setInviteEmails] = useState([]);
-  const [description, setDescription] = useState('');
   const [focusedField, setFocusedField] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
 
@@ -34,7 +33,6 @@ export default function AddMeetingScreen({ navigation }) {
       const meeting = await addMeeting({
         name: meetingName.trim(),
         participants: inviteEmails,
-        description: description.trim(),
       });
 
       if (inviteEmails.length > 0) {
@@ -99,14 +97,6 @@ export default function AddMeetingScreen({ navigation }) {
                 </View>
               ))}
             </View>
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.label}>회의 설명 <Text style={styles.optional}>(선택)</Text></Text>
-            <View style={[styles.inputWrap, styles.textareaWrap, focusedField === 'desc' && styles.inputFocused]}>
-              <TextInput style={[styles.input, styles.textarea]} placeholder="회의 목적이나 안건을 입력해주세요" placeholderTextColor="#A0AEC0" value={description} onChangeText={setDescription} multiline maxLength={200} textAlignVertical="top" onFocus={() => setFocusedField('desc')} onBlur={() => setFocusedField(null)} />
-            </View>
-            <Text style={styles.charCountRight}>{description.length}/200</Text>
           </View>
 
           <TouchableOpacity style={[styles.createBtn, (!workspace?.id || !meetingName.trim() || isCreating) && styles.createBtnDisabled]} onPress={create} disabled={!workspace?.id || !meetingName.trim() || isCreating} activeOpacity={0.88}>
