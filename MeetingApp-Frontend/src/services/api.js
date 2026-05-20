@@ -307,7 +307,7 @@ export const api = {
   saveSpeakerMappings(transcriptId, mappings) {
     return request(`/api/meetings/transcripts/${transcriptId}/speaker-mappings`, {
       method: 'PUT',
-      body: JSON.stringify(mappings),
+      body: JSON.stringify({ mappings }),
     });
   },
 

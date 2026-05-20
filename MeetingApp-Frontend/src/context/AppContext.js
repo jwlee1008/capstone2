@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
-import { api } from '../services/api';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { api, clearTokens, restoreTokens } from '../services/api';
 
 const AppContext = createContext(null);
 
@@ -17,6 +17,19 @@ function normalizeList(data) {
   if (Array.isArray(data?.data)) return data.data;
   if (Array.isArray(data?.items)) return data.items;
   return [];
+}
+
+function normalizeBackendDateTime(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return `${text}T00:00:00`;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(text)) return `${text}:00`;
+  return text;
+}
+
+function getSummaryTaskCount(summary, fallback = 0) {
+  return summary?.taskCount ?? summary?.taskStats?.total ?? fallback;
 }
 
 function mapWorkspace(raw, members = [], fallbackName = '') {
@@ -167,7 +180,7 @@ function buildSessionFromBackend({ transcript, summary, tasks = [], events = [],
     transcript: segments,
     tasks: tasks.map(mapTask),
     events: events.map(mapEvent),
-    taskCount: summary?.taskCount ?? tasks.length,
+    taskCount: getSummaryTaskCount(summary, tasks.length),
     eventCount: summary?.eventCount ?? events.length,
   };
 }
@@ -254,6 +267,31 @@ export function AppProvider({ children }) {
     if (stats) setTaskStats(stats);
     return mappedWorkspace;
   };
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const restoreSession = async () => {
+      const tokens = restoreTokens();
+      if (!tokens.accessToken) return;
+
+      try {
+        const profile = await api.getProfile();
+        if (!isMounted) return;
+        setIsApiMode(true);
+        setUser(mapUser(profile));
+        await loadWorkspaceBundle().catch(() => null);
+      } catch {
+        clearTokens();
+        if (isMounted) resetAppState();
+      }
+    };
+
+    restoreSession();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const login = async ({ email, password, name }) => {
     try {
@@ -371,7 +409,7 @@ export function AppProvider({ children }) {
           ...meeting,
           ...mapMeeting(meetingDetail || meeting, workspace?.members || []),
           sessions: session ? [session] : meeting.sessions,
-          taskCount: summary?.taskCount ?? tasks.length,
+          taskCount: getSummaryTaskCount(summary, tasks.length),
           eventCount: summary?.eventCount ?? meetingEvents.length,
         }
         : meeting
@@ -422,7 +460,7 @@ export function AppProvider({ children }) {
       description: task.description,
       assigneeId: task.assigneeId || null,
       assigneeName: task.assignee || task.assigneeName,
-      dueDate: task.dueDate || null,
+      dueDate: normalizeBackendDateTime(task.dueDate),
       workspaceId: task.workspaceId || workspace?.id || null,
       meetingId: task.meetingId || null,
     });
@@ -431,7 +469,10 @@ export function AppProvider({ children }) {
   };
 
   const updateCalendarTask = async (taskId, updates) => {
-    const updated = await api.updateTask(taskId, updates);
+    const updated = await api.updateTask(taskId, {
+      ...updates,
+      dueDate: updates.dueDate === undefined ? undefined : normalizeBackendDateTime(updates.dueDate),
+    });
     setCalendarTasks((prev) => prev.map((task) => String(task.id) === String(taskId) ? mapTask(updated) : task));
     return updated;
   };
