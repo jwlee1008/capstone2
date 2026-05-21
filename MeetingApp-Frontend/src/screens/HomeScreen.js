@@ -4,7 +4,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
 import { CARD_SHADOW, COLORS } from '../theme';
-import UserInviteSearch from '../components/UserInviteSearch';
 
 const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -31,13 +30,13 @@ export default function HomeScreen({ navigation }) {
     calendarTasks,
     calendarEvents,
     createWorkspace,
-    deleteWorkspace,
     selectWorkspace,
     acceptInvitation,
     declineInvitation,
     inviteMember,
   } = useAppContext();
   const [workspaceName, setWorkspaceName] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
   const [pendingAction, setPendingAction] = useState(null);
   const recentMeetings = meetings.slice(0, 3);
   const totalSessions = meetings.reduce((acc, meeting) => acc + meeting.sessions.length, 0);
@@ -69,28 +68,18 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
-  const handleDeleteWorkspace = async () => {
-    if (!workspace?.id) return;
-    const runDelete = async () => {
-      try {
-        setPendingAction(`delete-workspace-${workspace.id}`);
-        await deleteWorkspace(workspace.id);
-        Alert.alert('삭제 완료', '워크스페이스를 삭제했습니다.');
-      } catch (error) {
-        Alert.alert('삭제 실패', error?.message || '워크스페이스를 삭제하지 못했습니다.');
-      } finally {
-        setPendingAction(null);
-      }
-    };
-
-    if (typeof window !== 'undefined' && window.confirm) {
-      if (window.confirm(`${workspace.name} 워크스페이스를 삭제할까요?`)) await runDelete();
-      return;
+  const handleInvite = async () => {
+    if (!inviteEmail.trim()) return Alert.alert('입력 오류', '초대할 이메일을 입력해주세요.');
+    try {
+      setPendingAction('invite');
+      await inviteMember(inviteEmail);
+      Alert.alert('초대 완료', '가입된 이메일로 초대를 보냈습니다.');
+      setInviteEmail('');
+    } catch (error) {
+      Alert.alert('초대 실패', error?.message || '초대를 보내지 못했습니다.');
+    } finally {
+      setPendingAction(null);
     }
-    Alert.alert('워크스페이스 삭제', `${workspace.name} 워크스페이스를 삭제할까요?`, [
-      { text: '취소', style: 'cancel' },
-      { text: '삭제', style: 'destructive', onPress: runDelete },
-    ]);
   };
 
   const openMeetings = () => {
@@ -127,16 +116,13 @@ export default function HomeScreen({ navigation }) {
               <View style={styles.workspaceActions}>
                 <TouchableOpacity style={styles.primaryActionBtn} onPress={openCreateMeeting} activeOpacity={0.86}><Ionicons name="add-circle-outline" size={18} color="#FFFFFF" /><Text style={styles.primaryActionText}>회의 만들기</Text></TouchableOpacity>
                 <TouchableOpacity style={styles.secondaryActionBtn} onPress={openMeetings} activeOpacity={0.86}><Text style={styles.secondaryActionText}>회의 목록</Text></TouchableOpacity>
-                <TouchableOpacity style={styles.dangerIconBtn} onPress={handleDeleteWorkspace} activeOpacity={0.86} disabled={pendingAction === `delete-workspace-${workspace.id}`}><Ionicons name="trash-outline" size={18} color={COLORS.error} /></TouchableOpacity>
               </View>
               <View style={styles.memberRow}>{workspace.members.length === 0 ? <Text style={styles.noMemberText}>멤버를 불러오는 중입니다.</Text> : workspace.members.map((member) => <View key={member.id} style={styles.memberChip}><Text style={styles.memberChipText}>{member.name}</Text></View>)}</View>
               <View style={styles.inviteRow}>
-                <UserInviteSearch
-                  description="이름이나 이메일로 가입된 사용자를 검색한 뒤 선택해서 초대하세요."
-                  invitedEmails={workspace.invitedEmails}
-                  onInvite={inviteMember}
-                />
+                <View style={[styles.inputWrap, styles.inviteInputWrap]}><TextInput value={inviteEmail} onChangeText={setInviteEmail} style={styles.input} placeholder="팀원 초대 이메일" autoCapitalize="none" /></View>
+                <TouchableOpacity style={[styles.inviteBtn, pendingAction === 'invite' && styles.actionDisabled]} onPress={handleInvite} disabled={pendingAction === 'invite'}><Ionicons name="send" size={18} color="#FFFFFF" /></TouchableOpacity>
               </View>
+              {workspace.invitedEmails.map((email) => <Text key={email} style={styles.invitedText}>초대 대기: {email}</Text>)}
             </View>
           )}
           <View style={styles.workspaceHeaderRow}>
@@ -253,7 +239,6 @@ const styles = StyleSheet.create({
   memberBadge: { backgroundColor: '#EEF2FF', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 5 }, memberBadgeText: { color: COLORS.primary, fontWeight: '700', fontSize: 12 }, memberRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 }, memberChip: { backgroundColor: '#F1F5F9', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 6 }, memberChipText: { color: COLORS.text, fontWeight: '600', fontSize: 12 }, noMemberText: { color: COLORS.subtext, fontSize: 12 }, inviteRow: { flexDirection: 'row', gap: 8, marginTop: 14 }, inviteInputWrap: { flex: 1 }, inviteBtn: { width: 48, height: 48, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' }, actionDisabled: { opacity: 0.6 }, invitedText: { fontSize: 12, color: COLORS.subtext, marginTop: 8 },
   currentWorkspacePanel: { backgroundColor: '#F8FAFC', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: COLORS.border }, currentWorkspaceName: { fontSize: 20, fontWeight: '700', color: COLORS.text },
   workspaceActions: { flexDirection: 'row', gap: 8, marginTop: 14 }, primaryActionBtn: { flex: 1, height: 46, borderRadius: 12, backgroundColor: COLORS.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }, primaryActionText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 }, secondaryActionBtn: { height: 46, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' }, secondaryActionText: { color: COLORS.text, fontWeight: '700', fontSize: 13 },
-  dangerIconBtn: { width: 46, height: 46, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA', alignItems: 'center', justifyContent: 'center' },
   emptyWorkspaceBox: { backgroundColor: '#F8FAFC', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: COLORS.border }, emptyWorkspaceText: { color: COLORS.subtext, fontSize: 13 },
   workspaceGrid: { gap: 8 },
   workspaceListItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 12, borderWidth: 1, borderColor: COLORS.border, borderRadius: 12, backgroundColor: '#FFFFFF' },

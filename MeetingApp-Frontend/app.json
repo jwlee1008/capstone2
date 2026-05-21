@@ -3,19 +3,17 @@
     "name": "MeetFlow",
     "slug": "meetflow",
     "version": "1.0.0",
+    "scheme": "meetflow",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "ios": {
-      "infoPlist": {
-        "NSMicrophoneUsageDescription": "회의 녹음을 위해 마이크 권한이 필요합니다."
-      }
-    },
-    "android": {
-      "permissions": ["RECORD_AUDIO"]
-    },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "web": {
       "bundler": "metro"
-    }
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }

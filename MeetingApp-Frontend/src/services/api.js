@@ -1,73 +1,92 @@
-import Constants from 'expo-constants';
-import { Platform } from 'react-native';
+import * as SecureStore from 'expo-secure-store';
 
-const DEFAULT_API_PORT = process.env.EXPO_PUBLIC_API_PORT || '8080';
-const LOCALHOST_BASE_URL = `http://localhost:${DEFAULT_API_PORT}`;
+const DEFAULT_BASE_URL = 'http://localhost:8080';
 const REQUEST_TIMEOUT_MS = 12000;
 const UPLOAD_TIMEOUT_MS = 120000;
 const TRANSCRIBE_TIMEOUT_MS = 12 * 60 * 1000;
-const ANALYZE_TIMEOUT_MS = 180000;
 
 let accessToken = null;
 let refreshToken = null;
-let authExpiredHandler = null;
+const memoryStorage = {};
+
+function getWebStorage() {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+async function canUseSecureStore() {
+  try {
+    return await SecureStore.isAvailableAsync();
+  } catch {
+    return false;
+  }
+}
 
 const storage = {
-  get(key) {
+  getSync(key) {
     try {
-      return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+      return getWebStorage()?.getItem(key) || memoryStorage[key] || null;
     } catch {
-      return null;
+      return memoryStorage[key] || null;
     }
   },
+  async get(key) {
+    const webValue = this.getSync(key);
+    if (webValue) return webValue;
+    if (await canUseSecureStore()) {
+      try {
+        const secureValue = await SecureStore.getItemAsync(key);
+        if (secureValue) memoryStorage[key] = secureValue;
+        return secureValue;
+      } catch {
+        return null;
+      }
+    }
+    return memoryStorage[key] || null;
+  },
   set(key, value) {
+    memoryStorage[key] = value;
     try {
-      if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
+      getWebStorage()?.setItem(key, value);
     } catch {}
+    canUseSecureStore().then((available) => {
+      if (available) SecureStore.setItemAsync(key, value).catch(() => {});
+    });
   },
   remove(key) {
+    delete memoryStorage[key];
     try {
-      if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
+      getWebStorage()?.removeItem(key);
     } catch {}
+    canUseSecureStore().then((available) => {
+      if (available) SecureStore.deleteItemAsync(key).catch(() => {});
+    });
   },
 };
 
-function getExpoHost() {
-  const hostUri =
-    Constants.expoConfig?.hostUri ||
-    Constants.manifest2?.extra?.expoClient?.hostUri ||
-    Constants.manifest?.debuggerHost;
-  const host = String(hostUri || '').split(':')[0];
-  if (!host || host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') return null;
-  return host;
-}
+export const persistentStorage = storage;
 
-function getDefaultBaseUrl() {
-  if (Platform.OS === 'web') return LOCALHOST_BASE_URL;
-  const expoHost = getExpoHost();
-  return expoHost ? `http://${expoHost}:${DEFAULT_API_PORT}` : LOCALHOST_BASE_URL;
-}
-
-const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL || storage.get('API_BASE_URL');
+const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL || storage.getSync('API_BASE_URL');
 export const API_BASE_URL =
-  configuredBaseUrl === 'same-origin' ? '' : configuredBaseUrl || getDefaultBaseUrl();
-
-function createApiError(message, details = {}) {
-  const error = new Error(message);
-  Object.assign(error, details);
-  return error;
-}
+  configuredBaseUrl === 'same-origin' ? '' : configuredBaseUrl || DEFAULT_BASE_URL;
 
 export function setTokens(tokens = {}) {
-  accessToken = tokens.accessToken || null;
-  refreshToken = tokens.refreshToken || null;
+  if (Object.prototype.hasOwnProperty.call(tokens, 'accessToken')) {
+    accessToken = tokens.accessToken || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(tokens, 'refreshToken')) {
+    refreshToken = tokens.refreshToken || null;
+  }
   if (accessToken) storage.set('accessToken', accessToken);
   if (refreshToken) storage.set('refreshToken', refreshToken);
 }
 
-export function restoreTokens() {
-  accessToken = accessToken || storage.get('accessToken');
-  refreshToken = refreshToken || storage.get('refreshToken');
+export async function restoreTokens() {
+  accessToken = accessToken || await storage.get('accessToken');
+  refreshToken = refreshToken || await storage.get('refreshToken');
   return { accessToken, refreshToken };
 }
 
@@ -76,18 +95,6 @@ export function clearTokens() {
   refreshToken = null;
   storage.remove('accessToken');
   storage.remove('refreshToken');
-}
-
-export function setAuthExpiredHandler(handler) {
-  authExpiredHandler = typeof handler === 'function' ? handler : null;
-}
-
-function getAuthHeaders(extraHeaders = {}) {
-  restoreTokens();
-  return {
-    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-    ...extraHeaders,
-  };
 }
 
 async function parseResponse(response) {
@@ -101,7 +108,7 @@ async function parseResponse(response) {
 }
 
 async function request(path, options = {}, retry = true) {
-  restoreTokens();
+  await restoreTokens();
   const { timeoutMs, ...fetchOptions } = options;
   const isFormData = options.body instanceof FormData;
   const controller = new AbortController();
@@ -117,17 +124,11 @@ async function request(path, options = {}, retry = true) {
     console.info('[api] request', options.method || 'GET', `${API_BASE_URL}${path}`);
     response = await fetch(`${API_BASE_URL}${path}`, { ...fetchOptions, headers, signal: controller.signal });
   } catch (error) {
-    console.log('[api] network error', options.method || 'GET', `${API_BASE_URL}${path}`, error?.message || error);
+    console.error('[api] network error', options.method || 'GET', `${API_BASE_URL}${path}`, error);
     if (error?.name === 'AbortError') {
-      throw createApiError(`백엔드 응답이 없습니다. IntelliJ에서 서버가 켜져 있는지 확인해주세요. (${API_BASE_URL})`, {
-        isBackendUnavailable: true,
-        isNetworkError: true,
-      });
+      throw new Error(`백엔드 응답이 없습니다. IntelliJ에서 서버가 켜져 있는지 확인해주세요. (${API_BASE_URL})`);
     }
-    throw createApiError(`백엔드에 연결할 수 없습니다. IntelliJ 서버와 API 주소를 확인해주세요. (${API_BASE_URL})`, {
-      isBackendUnavailable: true,
-      isNetworkError: true,
-    });
+    throw new Error(`백엔드에 연결할 수 없습니다. IntelliJ 서버와 API 주소를 확인해주세요. (${API_BASE_URL})`);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -139,27 +140,15 @@ async function request(path, options = {}, retry = true) {
 
   const data = await parseResponse(response);
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith('/api/auth/')) {
-      clearTokens();
-      authExpiredHandler?.();
-    }
-    const message = data?.error || data?.message || data?.errors || data || `HTTP ${response.status}`;
-    console.log('[api] request failed', options.method || 'GET', `${API_BASE_URL}${path}`, response.status, data);
-    throw createApiError(String(message), {
-      status: response.status,
-      isForbidden: response.status === 403,
-      isBackendUnavailable: response.status === 502 && String(message).startsWith('Cannot reach'),
-    });
+    const message = data?.message || data || `HTTP ${response.status}`;
+    console.error('[api] request failed', options.method || 'GET', `${API_BASE_URL}${path}`, response.status, data);
+    throw new Error(String(message));
   }
   return data;
 }
 
 function getAssetName(asset) {
   return asset?.name || asset?.file?.name || 'recording.m4a';
-}
-
-function getUploadAssetName(asset, fallback = 'upload.bin') {
-  return asset?.name || asset?.file?.name || fallback;
 }
 
 function inferAudioContentType(filename, fallback) {
@@ -172,29 +161,6 @@ function inferAudioContentType(filename, fallback) {
   if (ext === 'ogg') return 'audio/ogg';
   if (ext === 'webm') return 'audio/webm';
   return 'audio/mp4';
-}
-
-function inferImageContentType(filename, fallback) {
-  if (fallback) return fallback;
-  const ext = String(filename || '').split('.').pop()?.toLowerCase();
-  if (ext === 'png') return 'image/png';
-  if (ext === 'webp') return 'image/webp';
-  if (ext === 'gif') return 'image/gif';
-  return 'image/jpeg';
-}
-
-async function getUploadBody(asset) {
-  if (asset?.file) return asset.file;
-  if (!asset?.uri) throw new Error('업로드할 파일을 찾을 수 없습니다.');
-  if (Platform.OS !== 'web') {
-    return {
-      uri: asset.uri,
-      name: getUploadAssetName(asset),
-      type: asset.mimeType || inferImageContentType(getUploadAssetName(asset)),
-    };
-  }
-  const response = await fetch(asset.uri);
-  return response.blob();
 }
 
 async function appendRecordingFile(formData, asset) {
@@ -210,7 +176,7 @@ async function appendRecordingFile(formData, asset) {
     throw new Error('업로드할 녹음 파일을 찾을 수 없습니다.');
   }
 
-  if (Platform.OS === 'web' && typeof File !== 'undefined') {
+  if (typeof File !== 'undefined') {
     const response = await fetch(asset.uri);
     const blob = await response.blob();
     formData.append('file', new File([blob], filename, { type: contentType }));
@@ -243,6 +209,16 @@ export const api = {
     return request('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
+    }).then((data) => {
+      setTokens(data);
+      return data;
+    });
+  },
+
+  googleLogin(code) {
+    return request('/api/oauth2/google/callback', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
     }).then((data) => {
       setTokens(data);
       return data;
@@ -307,6 +283,10 @@ export const api = {
     });
   },
 
+  leaveWorkspace(workspaceId) {
+    return request(`/api/workspaces/${workspaceId}/members/me`, { method: 'DELETE' });
+  },
+
   searchUsers(query) {
     return request(`/api/user/search?q=${encodeURIComponent(query)}`);
   },
@@ -316,10 +296,10 @@ export const api = {
     return request(`/api/meetings${query}`);
   },
 
-  createMeeting({ workspaceId, title, description }) {
+  createMeeting({ workspaceId, title }) {
     return request('/api/meetings', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId, title, description }),
+      body: JSON.stringify({ workspaceId, title }),
     });
   },
 
@@ -339,10 +319,6 @@ export const api = {
     return request(`/api/recordings?meetingId=${meetingId}`);
   },
 
-  deleteRecording(recordingId) {
-    return request(`/api/recordings/${recordingId}`, { method: 'DELETE' });
-  },
-
   async uploadRecording(meetingId, asset) {
     const formData = new FormData();
     await appendRecordingFile(formData, asset);
@@ -351,6 +327,12 @@ export const api = {
       method: 'POST',
       body: formData,
       timeoutMs: UPLOAD_TIMEOUT_MS,
+    });
+  },
+
+  updateRecordingStatus(recordingId, status) {
+    return request(`/api/recordings/${recordingId}/status?status=${encodeURIComponent(status)}`, {
+      method: 'PATCH',
     });
   },
 
@@ -379,7 +361,6 @@ export const api = {
   analyzeTranscript(transcriptId) {
     return request(`/api/meetings/transcripts/${transcriptId}/gemini-analyze`, {
       method: 'POST',
-      timeoutMs: ANALYZE_TIMEOUT_MS,
     });
   },
 
@@ -423,6 +404,13 @@ export const api = {
     });
   },
 
+  updateEvent(eventId, updates) {
+    return request(`/api/events/${eventId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+  },
+
   deleteEvent(eventId) {
     return request(`/api/events/${eventId}`, { method: 'DELETE' });
   },
@@ -441,21 +429,6 @@ export const api = {
     });
   },
 
-  getProfileImageUploadUrl(filename) {
-    return request(`/api/user/presigned-url?filename=${encodeURIComponent(filename)}`);
-  },
-
-  async uploadToPresignedUrl(presignedUrl, asset, fallbackName = 'upload.bin') {
-    const filename = getUploadAssetName(asset, fallbackName);
-    const contentType = inferImageContentType(filename, asset?.mimeType || asset?.file?.type);
-    const response = await fetch(presignedUrl, {
-      method: 'PUT',
-      headers: { 'Content-Type': contentType },
-      body: await getUploadBody(asset),
-    });
-    if (!response.ok) throw new Error(`파일 업로드에 실패했습니다. HTTP ${response.status}`);
-  },
-
   updatePassword(payload) {
     return request('/api/user/password', {
       method: 'PATCH',
@@ -467,31 +440,8 @@ export const api = {
     return request('/api/user/account', { method: 'DELETE' });
   },
 
-  getGoogleAuthUrl() {
-    return request('/api/oauth2/google/auth-url');
-  },
-
-  getNotionAuthUrl() {
-    return request('/api/oauth2/notion/auth-url');
-  },
-
   getNotionLinkAuthUrl() {
     return request('/api/oauth2/notion/link/auth-url');
-  },
-
-  oauthCallback(provider, code, method = 'POST') {
-    const normalizedProvider = String(provider || '').toLowerCase();
-    const path = `/api/oauth2/${normalizedProvider}/callback`;
-    const call = method === 'GET'
-      ? request(`${path}?code=${encodeURIComponent(code)}`)
-      : request(path, {
-        method: 'POST',
-        body: JSON.stringify({ code }),
-      });
-    return call.then((data) => {
-      setTokens(data);
-      return data;
-    });
   },
 
   linkNotionAccount(code) {
@@ -508,60 +458,9 @@ export const api = {
     });
   },
 
-  setNotionMeetingNotesDatabase(payload) {
-    return request('/api/oauth2/notion/meeting-notes-database', {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
-  },
-
-  syncEventToNotion(eventId) {
-    return request(`/api/calendar/events/${eventId}/notion-sync`, {
-      method: 'POST',
-      timeoutMs: UPLOAD_TIMEOUT_MS,
-    });
-  },
-
   syncWorkspaceToNotion(workspaceId) {
     return request(`/api/calendar/workspaces/${workspaceId}/notion-sync`, {
       method: 'POST',
-      timeoutMs: UPLOAD_TIMEOUT_MS,
     });
-  },
-
-  syncEventsToNotion(eventIds) {
-    return request('/api/calendar/events/notion-sync-batch', {
-      method: 'POST',
-      body: JSON.stringify({ eventIds }),
-      timeoutMs: UPLOAD_TIMEOUT_MS,
-    });
-  },
-
-  getRecordingPipeline(recordingId) {
-    return request(`/api/recordings/${recordingId}/pipeline`);
-  },
-
-  exportMeetingToNotion(meetingId, includeEvents = true) {
-    return request(`/api/meetings/${meetingId}/notion-export?includeEvents=${includeEvents ? 'true' : 'false'}`, {
-      method: 'POST',
-    });
-  },
-
-  async exportMeetingPdf(meetingId, includeEvents = true) {
-    const path = `/api/meetings/${meetingId}/export/pdf?includeEvents=${includeEvents ? 'true' : 'false'}`;
-    const response = await fetch(`${API_BASE_URL}${path}`, {
-      method: 'GET',
-      headers: getAuthHeaders(),
-    });
-    if (!response.ok) {
-      const data = await parseResponse(response);
-      throw createApiError(String(data?.error || data?.message || data || `HTTP ${response.status}`), { status: response.status });
-    }
-    const blob = await response.blob();
-    return {
-      blob,
-      filename: `meeting-${meetingId}.pdf`,
-      objectUrl: Platform.OS === 'web' && typeof URL !== 'undefined' ? URL.createObjectURL(blob) : null,
-    };
   },
 };
