@@ -1,4 +1,4 @@
-﻿import React from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../theme';
 import { useAppContext } from '../context/AppContext';
+import { persistentStorage } from '../services/api';
 import LoginScreen from '../screens/LoginScreen';
 import HomeScreen from '../screens/HomeScreen';
 import MeetingListScreen from '../screens/MeetingListScreen';
@@ -17,6 +18,7 @@ import MyInfoScreen from '../screens/ProfileScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
+const NAVIGATION_STATE_KEY = 'navigationState';
 
 function CustomTabBar({ state, navigation }) {
   const insets = useSafeAreaInsets();
@@ -57,20 +59,54 @@ function MainTabs() {
 
 export default function AppNavigator() {
   const { user, isRestoringSession } = useAppContext();
-  if (isRestoringSession) {
-    return (
-      <View style={styles.loadingScreen}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
-        <Text style={styles.loadingText}>로그인 상태 확인 중</Text>
-      </View>
-    );
+  const [initialState, setInitialState] = useState();
+  const [isNavigationReady, setIsNavigationReady] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    persistentStorage.get(NAVIGATION_STATE_KEY).then((savedState) => {
+      if (!isMounted) return;
+      if (savedState) {
+        try {
+          setInitialState(JSON.parse(savedState));
+        } catch {
+          persistentStorage.remove(NAVIGATION_STATE_KEY);
+        }
+      }
+    }).finally(() => {
+      if (isMounted) setIsNavigationReady(true);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isNavigationReady && !isRestoringSession && !user) {
+      persistentStorage.remove(NAVIGATION_STATE_KEY);
+    }
+  }, [isNavigationReady, isRestoringSession, user]);
+
+  if (!isNavigationReady || isRestoringSession) {
+    return <View style={styles.loadingScreen}><ActivityIndicator size="small" color={COLORS.primary} /></View>;
   }
-  return <NavigationContainer><Stack.Navigator screenOptions={{ headerShown: false }}>{user ? <Stack.Screen name="Main" component={MainTabs} /> : <Stack.Screen name="Login" component={LoginScreen} />}</Stack.Navigator></NavigationContainer>;
+
+  return (
+    <NavigationContainer
+      initialState={user ? initialState : undefined}
+      onStateChange={(state) => {
+        if (user) persistentStorage.set(NAVIGATION_STATE_KEY, JSON.stringify(state));
+      }}
+    >
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {user ? <Stack.Screen name="Main" component={MainTabs} /> : <Stack.Screen name="Login" component={LoginScreen} />}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
 }
 
 const styles = StyleSheet.create({
   loadingScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.background },
-  loadingText: { marginTop: 12, fontSize: 13, color: COLORS.subtext, fontWeight: '600' },
   tabBarContainer: { flexDirection: 'row', backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 8, paddingHorizontal: 16, alignItems: 'flex-end', shadowColor: '#000', shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 8 },
   tabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 4 },
   centerTabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: Platform.OS === 'web' ? -18 : -24 },

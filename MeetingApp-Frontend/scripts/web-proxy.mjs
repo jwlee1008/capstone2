@@ -1,28 +1,19 @@
 import http from 'node:http';
+import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 
-const expoPort = Number(process.env.EXPO_PORT || 8081);
-const proxyPort = Number(process.env.PROXY_PORT || 3000);
+const proxyPort = Number(process.env.PROXY_PORT || 8081);
+const expoPort = Number(process.env.EXPO_PORT || 8082);
 const backendOrigin = process.env.BACKEND_ORIGIN || 'http://localhost:8080';
-const proxyOrigin = `http://localhost:${proxyPort}`;
-const compatRequire = fileURLToPath(new URL('./node-compat.cjs', import.meta.url));
-const nodeOptions = [process.env.NODE_OPTIONS, `--require=${compatRequire}`].filter(Boolean).join(' ');
 
+// Keep the browser on 8081 so API calls stay same-origin without backend CORS changes.
 const expo = spawn('npx', ['expo', 'start', '--web', '--port', String(expoPort)], {
   stdio: 'inherit',
   shell: true,
   env: {
     ...process.env,
-    EXPO_PUBLIC_API_BASE_URL: proxyOrigin,
-    NODE_OPTIONS: nodeOptions,
+    EXPO_PUBLIC_API_BASE_URL: 'same-origin',
   },
-});
-
-const getCorsHeaders = (req) => ({
-  'Access-Control-Allow-Origin': req.headers.origin || '*',
-  'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-  'Access-Control-Allow-Headers': req.headers['access-control-request-headers'] || 'Content-Type, Authorization',
 });
 
 const proxyRequest = (clientReq, clientRes, targetOrigin) => {
@@ -37,12 +28,12 @@ const proxyRequest = (clientReq, clientRes, targetOrigin) => {
       host: target.host,
     },
   }, (proxyRes) => {
-    clientRes.writeHead(proxyRes.statusCode || 500, { ...proxyRes.headers, ...getCorsHeaders(clientReq) });
+    clientRes.writeHead(proxyRes.statusCode || 500, proxyRes.headers);
     proxyRes.pipe(clientRes);
   });
 
   proxyReq.on('error', () => {
-    clientRes.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', ...getCorsHeaders(clientReq) });
+    clientRes.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
     clientRes.end(`Cannot reach ${targetOrigin}`);
   });
 
@@ -52,11 +43,6 @@ const proxyRequest = (clientReq, clientRes, targetOrigin) => {
 const server = http.createServer((req, res) => {
   const url = req.url || '/';
   if (url.startsWith('/api/')) {
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, getCorsHeaders(req));
-      res.end();
-      return;
-    }
     proxyRequest(req, res, backendOrigin);
     return;
   }
@@ -64,9 +50,28 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(proxyPort, () => {
-  console.log(`\nFrontend proxy: ${proxyOrigin}`);
+  console.log(`\nFrontend proxy: http://localhost:${proxyPort}`);
   console.log(`Expo web:       http://localhost:${expoPort}`);
   console.log(`Backend:        ${backendOrigin}\n`);
+});
+
+server.on('upgrade', (req, socket, head) => {
+  const target = new URL(req.url || '/', `http://localhost:${expoPort}`);
+  const proxySocket = net.connect(Number(target.port) || 80, target.hostname, () => {
+    proxySocket.write(`${req.method} ${target.pathname}${target.search} HTTP/${req.httpVersion}\r\n`);
+    proxySocket.write(
+      Object.entries({ ...req.headers, host: target.host })
+        .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+        .join('\r\n'),
+    );
+    proxySocket.write('\r\n\r\n');
+    if (head.length) proxySocket.write(head);
+    socket.pipe(proxySocket);
+    proxySocket.pipe(socket);
+  });
+
+  proxySocket.on('error', () => socket.destroy());
+  socket.on('error', () => proxySocket.destroy());
 });
 
 const shutdown = () => {

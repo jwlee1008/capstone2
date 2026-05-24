@@ -1,88 +1,407 @@
-import React, { useMemo, useState } from 'react';
-import { Alert, Linking, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Linking,
+  Modal,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAppContext } from '../context/AppContext';
+import { persistentStorage } from '../services/api';
 import { COLORS } from '../theme';
 
+const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
+const CALENDAR_VIEW_MONTH_KEY = 'calendarViewMonth';
+
 const STATUS_OPTIONS = [
-  { code: 'TODO', label: '등록' },
-  { code: 'IN_PROGRESS', label: '진행' },
+  { code: 'TODO', label: '할일' },
+  { code: 'IN_PROGRESS', label: '진행중' },
   { code: 'DONE', label: '완료' },
 ];
 
-const formatDateTime = (value) => {
-  if (!value) return '시간 미정';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).replace('T', ' ');
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-};
+const TASK_TONES = [
+  { background: '#EEF2FF', border: '#8B91F8', text: '#4F46E5' },
+  { background: '#FFF7E6', border: '#F5C451', text: '#946A22' },
+  { background: '#EAF5FF', border: '#7CC4F8', text: '#2A6F9E' },
+  { background: '#FDEAF2', border: '#E889A8', text: '#93465F' },
+  { background: '#F0F1F5', border: '#9CA3AF', text: '#4B5563' },
+  { background: '#ECFDF5', border: '#6EE7B7', text: '#047857' },
+];
 
-const toGoogleDate = (value, fallbackHour = 9) => {
-  if (!value) return '';
-  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? `${value}T${String(fallbackHour).padStart(2, '0')}:00:00` : value;
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toISOString().replace(/[-:]|\.\d{3}/g, '');
-};
+function getUrlParam(url, key) {
+  if (!url) return null;
+  const query = String(url).split('?')[1]?.split('#')[0] || '';
+  if (!query) return null;
 
-const buildGoogleCalendarUrl = ({ title, startAt, endAt, description, location }) => {
-  const start = toGoogleDate(startAt, 9);
-  const end = toGoogleDate(endAt || startAt, 10);
-  const params = new URLSearchParams({
-    action: 'TEMPLATE',
-    text: title || '회의 일정',
-    ...(start && end ? { dates: `${start}/${end}` } : {}),
-    ...(description ? { details: description } : {}),
-    ...(location ? { location } : {}),
+  const params = query.split('&');
+  for (const param of params) {
+    const [rawName, rawValue = ''] = param.split('=');
+    if (decodeURIComponent(rawName) === key) {
+      return decodeURIComponent(rawValue.replace(/\+/g, ' '));
+    }
+  }
+  return null;
+}
+
+function getNotionCode(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const queryCode = getUrlParam(text, 'code');
+  if (queryCode) return queryCode;
+  return /^[A-Za-z0-9_-]{12,}$/.test(text) ? text : null;
+}
+
+function getFreshNotionAuthUrl(authUrl) {
+  try {
+    const url = new URL(authUrl);
+    url.searchParams.set('state', `meetflow-web-${Date.now()}`);
+    return url.toString();
+  } catch {
+    const separator = String(authUrl).includes('?') ? '&' : '?';
+    return `${authUrl}${separator}state=meetflow-web-${Date.now()}`;
+  }
+}
+
+function toDateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateKey(dateKey) {
+  const [year, month, day] = String(dateKey).split('-').map(Number);
+  if (!year || !month || !day) return new Date();
+  return new Date(year, month - 1, day);
+}
+
+function addMonths(date, amount) {
+  return new Date(date.getFullYear(), date.getMonth() + amount, 1);
+}
+
+function getMonthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function getMonthTitle(date) {
+  return `${date.getFullYear()}년 ${date.getMonth() + 1}월`;
+}
+
+function getDateLabel(dateKey) {
+  const date = parseDateKey(dateKey);
+  return `${date.getMonth() + 1}월 ${date.getDate()}일 (${WEEKDAY_LABELS[date.getDay()]})`;
+}
+
+function getTaskDateKey(task) {
+  if (!task?.dueDate) return '';
+  return String(task.dueDate).slice(0, 10);
+}
+
+function compareTasks(a, b) {
+  const aDate = getTaskDateKey(a) || '9999-99-99';
+  const bDate = getTaskDateKey(b) || '9999-99-99';
+  if (aDate !== bDate) return aDate.localeCompare(bDate);
+  return String(a.title || '').localeCompare(String(b.title || ''));
+}
+
+function buildMonthDays(monthDate) {
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const startDate = new Date(year, month, 1 - firstDay.getDay());
+  const todayKey = toDateKey(new Date());
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(startDate);
+    date.setDate(startDate.getDate() + index);
+    const key = toDateKey(date);
+    return {
+      date,
+      key,
+      isCurrentMonth: date.getMonth() === month,
+      isToday: key === todayKey,
+    };
   });
-  return `https://calendar.google.com/calendar/render?${params.toString()}`;
-};
+}
+
+function getTaskTone(task, index = 0) {
+  if (task?.statusCode === 'DONE') return TASK_TONES[4];
+  if (task?.statusCode === 'IN_PROGRESS') return TASK_TONES[2];
+
+  const seed = String(task?.id || task?.title || index);
+  const hash = seed.split('').reduce((sum, char) => sum + char.charCodeAt(0), index);
+  return TASK_TONES[Math.abs(hash) % TASK_TONES.length];
+}
+
+function getStatusLabel(statusCode) {
+  return STATUS_OPTIONS.find((option) => option.code === statusCode)?.label || '할일';
+}
 
 export default function CalendarScreen() {
   const {
     calendarTasks,
-    calendarEvents,
-    taskStats,
+    notionConnected,
+    notionStatus,
+    workspace,
+    workspaces,
+    selectWorkspace,
+    refreshWorkspaceData,
+    startNotionCalendarLink,
+    completeNotionCalendarLink,
+    refreshNotionStatus,
+    syncNotionCalendar,
     updateCalendarTask,
     deleteCalendarTask,
-    addCalendarEvent,
-    deleteCalendarEvent,
   } = useAppContext();
-  const [eventForm, setEventForm] = useState({ title: '', date: '', startTime: '10:00', endTime: '11:00' });
 
-  const groupedTasks = useMemo(() => calendarTasks.reduce((acc, task) => {
-    const key = task.dueDate || '마감일 미정';
-    acc[key] = [...(acc[key] || []), task];
-    return acc;
-  }, {}), [calendarTasks]);
+  const [viewMonth, setViewMonth] = useState(() => new Date());
+  const [selectedDateKey, setSelectedDateKey] = useState(null);
+  const [isMonthTasksOpen, setIsMonthTasksOpen] = useState(false);
+  const [notionAction, setNotionAction] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [switchingWorkspaceId, setSwitchingWorkspaceId] = useState(null);
+  const [isCalendarStateReady, setIsCalendarStateReady] = useState(false);
+  const [isNotionStatusLoading, setIsNotionStatusLoading] = useState(false);
+  const lastFocusRefreshRef = useRef(null);
 
-  const openGoogleCalendar = async (item) => {
+  const monthDays = useMemo(() => buildMonthDays(viewMonth), [viewMonth]);
+  const viewMonthKey = useMemo(() => getMonthKey(viewMonth), [viewMonth]);
+
+  const tasksByDate = useMemo(() => {
+    return calendarTasks.reduce((acc, task) => {
+      const key = getTaskDateKey(task);
+      if (!key) return acc;
+      acc[key] = [...(acc[key] || []), task].sort(compareTasks);
+      return acc;
+    }, {});
+  }, [calendarTasks]);
+
+  const monthTasks = useMemo(() => {
+    return calendarTasks
+      .filter((task) => getTaskDateKey(task).startsWith(viewMonthKey))
+      .slice()
+      .sort(compareTasks);
+  }, [calendarTasks, viewMonthKey]);
+
+  const selectedDayTasks = useMemo(() => {
+    if (!selectedDateKey) return [];
+    return tasksByDate[selectedDateKey] || [];
+  }, [selectedDateKey, tasksByDate]);
+
+  useEffect(() => {
+    let isMounted = true;
+    persistentStorage.get(CALENDAR_VIEW_MONTH_KEY).then((savedMonthKey) => {
+      if (!isMounted || !savedMonthKey) return;
+      const restoredMonth = parseDateKey(`${savedMonthKey}-01`);
+      setViewMonth(restoredMonth);
+    }).catch(() => {}).finally(() => {
+      if (isMounted) setIsCalendarStateReady(true);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isCalendarStateReady) return;
+    persistentStorage.set(CALENDAR_VIEW_MONTH_KEY, viewMonthKey);
+  }, [isCalendarStateReady, viewMonthKey]);
+
+  useFocusEffect(useCallback(() => {
+    const refreshKey = `${workspace?.id || 'none'}:${notionAction || 'idle'}`;
+    if (lastFocusRefreshRef.current === refreshKey || notionAction) return undefined;
+    lastFocusRefreshRef.current = refreshKey;
+    refreshWorkspaceData?.().catch(() => {});
+    setIsNotionStatusLoading(true);
+    refreshNotionStatus?.().catch(() => {}).finally(() => setIsNotionStatusLoading(false));
+    return undefined;
+  }, [workspace?.id, notionAction]));
+
+  const handleRefresh = useCallback(async () => {
     try {
-      await Linking.openURL(buildGoogleCalendarUrl(item));
+      setIsRefreshing(true);
+      await refreshWorkspaceData?.();
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [refreshWorkspaceData]);
+
+  const handleSelectWorkspace = async (workspaceId) => {
+    if (!workspaceId || String(workspace?.id) === String(workspaceId)) return;
+    try {
+      setSwitchingWorkspaceId(workspaceId);
+      setSelectedDateKey(null);
+      await selectWorkspace(workspaceId);
     } catch (error) {
-      Alert.alert('열기 실패', error?.message || 'Google 캘린더 링크를 열지 못했습니다.');
+      Alert.alert('워크스페이스 변경 실패', error?.message || '워크스페이스를 변경하지 못했습니다.');
+    } finally {
+      setSwitchingWorkspaceId(null);
     }
   };
 
-  const handleExport = () => {
-    const exportable = [...calendarEvents, ...calendarTasks.filter((task) => task.dueDate)];
-    if (exportable.length === 0) return Alert.alert('내보낼 항목 없음', '시간이 있는 일정이나 마감일이 있는 할일이 없습니다.');
-    if (exportable.length === 1) return openGoogleCalendar(exportable[0]);
-    return Alert.alert('항목 선택', '아래 각 카드의 Google 캘린더 버튼으로 필요한 항목을 하나씩 추가해주세요.');
+  const completeNotionFromUrl = useCallback(async (url) => {
+    const error = getUrlParam(url, 'error');
+    if (error) {
+      Alert.alert('Notion 연결 실패', 'Notion 연결이 취소되었거나 승인되지 않았습니다.');
+      return false;
+    }
+
+    const code = getNotionCode(url);
+    if (!code) return false;
+
+    try {
+      setNotionAction('link');
+      await completeNotionCalendarLink(code);
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && String(window.location.href).includes('code=')) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+      Alert.alert('Notion 연결 완료', 'Notion 캘린더 연결이 완료되었습니다.');
+      return true;
+    } catch (connectError) {
+      Alert.alert('Notion 연결 실패', connectError?.message || 'Notion 계정을 연결하지 못했습니다.');
+      return false;
+    } finally {
+      setNotionAction(null);
+    }
+  }, [completeNotionCalendarLink]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      completeNotionFromUrl(url);
+    });
+
+    Linking.getInitialURL().then((url) => {
+      if (isMounted && url) completeNotionFromUrl(url);
+    }).catch(() => {});
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      completeNotionFromUrl(window.location.href);
+    }
+
+    return () => {
+      isMounted = false;
+      subscription.remove();
+    };
+  }, [completeNotionFromUrl]);
+
+  const openNotionAuthOnWeb = (authUrl) => new Promise((resolve) => {
+    if (typeof window === 'undefined') {
+      resolve(false);
+      return;
+    }
+
+    const width = Math.min(980, window.screen?.availWidth || 980);
+    const height = Math.min(860, window.screen?.availHeight || 860);
+    const left = Math.max(0, ((window.screen?.availWidth || width) - width) / 2);
+    const top = Math.max(0, ((window.screen?.availHeight || height) - height) / 2);
+    const popup = window.open(
+      getFreshNotionAuthUrl(authUrl),
+      `meetflow-notion-${Date.now()}`,
+      `width=${Math.round(width)},height=${Math.round(height)},left=${Math.round(left)},top=${Math.round(top)},resizable=yes,scrollbars=yes`,
+    );
+    if (!popup) {
+      window.location.href = authUrl;
+      resolve(false);
+      return;
+    }
+
+    let settled = false;
+    let timer = null;
+    const finish = async (handled) => {
+      if (settled) return;
+      settled = true;
+      if (timer) window.clearInterval(timer);
+      window.removeEventListener('message', handleMessage);
+      if (handled) popup.close();
+      resolve(Boolean(handled));
+    };
+
+    async function handleMessage(event) {
+      const data = event?.data;
+      if (!data || data.type !== 'meetflow:notion-link') return;
+
+      const params = new URLSearchParams();
+      if (data.code) params.set('code', data.code);
+      if (data.error) params.set('error', data.error);
+      const handled = await completeNotionFromUrl(`meetflow://notion/link?${params.toString()}`);
+      finish(handled);
+    }
+
+    window.addEventListener('message', handleMessage);
+
+    timer = window.setInterval(async () => {
+      let href = '';
+      try {
+        href = popup.location?.href || '';
+      } catch {}
+
+      if (href) {
+        const handled = await completeNotionFromUrl(href);
+        if (handled) {
+          finish(true);
+          return;
+        }
+      }
+
+      if (popup.closed) {
+        const pasted = window.prompt('Notion 승인 후 앱으로 돌아오지 않으면 meetflow:// 주소 또는 인증 code를 붙여넣어 주세요.');
+        if (!pasted) {
+          finish(false);
+          return;
+        }
+        const handled = await completeNotionFromUrl(pasted);
+        finish(handled || await completeNotionFromUrl(`meetflow://notion/link?code=${encodeURIComponent(pasted.trim())}`));
+      }
+    }, 500);
+  });
+
+  const handleConnectNotion = async () => {
+    try {
+      setNotionAction('connect');
+      const status = await refreshNotionStatus?.().catch(() => null);
+      if (status?.linked) {
+        await syncNotionCalendar();
+        Alert.alert('Notion 설정 완료', 'Notion 캘린더 설정과 동기화를 완료했습니다.');
+        return;
+      }
+      const { authUrl } = await startNotionCalendarLink();
+      if (Platform.OS === 'web') {
+        await openNotionAuthOnWeb(authUrl);
+        return;
+      }
+      await Linking.openURL(authUrl);
+    } catch (error) {
+      Alert.alert('Notion 연결 실패', error?.message || 'Notion 인증 화면을 열지 못했습니다.');
+    } finally {
+      setNotionAction(null);
+    }
   };
 
-  const handleCreateEvent = async () => {
-    if (!eventForm.title.trim() || !eventForm.date.trim()) return Alert.alert('입력 오류', '일정 제목과 날짜를 입력해주세요.');
+  const handleExport = async () => {
     try {
-      await addCalendarEvent({
-        title: eventForm.title.trim(),
-        startAt: `${eventForm.date}T${eventForm.startTime || '10:00'}:00`,
-        endAt: `${eventForm.date}T${eventForm.endTime || '11:00'}:00`,
-      });
-      setEventForm({ title: '', date: '', startTime: '10:00', endTime: '11:00' });
+      const status = await refreshNotionStatus?.().catch(() => null);
+      if (!status?.linked && !notionConnected) {
+        await handleConnectNotion();
+        return;
+      }
+
+      setNotionAction('sync');
+      await syncNotionCalendar();
+      Alert.alert('동기화 완료', 'Notion 캘린더와 동기화했습니다.');
     } catch (error) {
-      Alert.alert('등록 실패', error?.message || '일정을 등록하지 못했습니다.');
+      Alert.alert('동기화 실패', error?.message || 'Notion 캘린더 동기화에 실패했습니다.');
+    } finally {
+      setNotionAction(null);
     }
   };
 
@@ -102,150 +421,423 @@ export default function CalendarScreen() {
     }
   };
 
-  const handleDeleteEvent = async (eventId) => {
-    try {
-      await deleteCalendarEvent(eventId);
-    } catch (error) {
-      Alert.alert('삭제 실패', error?.message || '일정을 삭제하지 못했습니다.');
-    }
-  };
+  const isNotionBusy = Boolean(notionAction) || isNotionStatusLoading;
+  const notionReady = notionConnected && notionStatus?.calendarConfigured;
+  const notionButtonLabel = notionConnected ? (notionReady ? 'Notion 동기화' : 'Notion 설정 완료') : 'Notion 연결하기';
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={(
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            tintColor={COLORS.primary}
+            colors={[COLORS.primary]}
+          />
+        )}
+      >
         <View style={styles.header}>
           <Text style={styles.headerTitle}>캘린더</Text>
-          <View style={styles.headerBadge}><Text style={styles.headerBadgeText}>{calendarEvents.length + calendarTasks.length}개</Text></View>
+          <View style={styles.headerBadge}>
+            <Text style={styles.headerBadgeText}>할일 {calendarTasks.length}개</Text>
+          </View>
         </View>
 
-        <View style={styles.exportCard}>
-          <View style={styles.exportTop}>
-            <View style={styles.iconWrap}><Ionicons name="calendar-clear-outline" size={22} color={COLORS.primary} /></View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>Google 캘린더로 열기</Text>
-              <Text style={styles.cardDesc}>일정은 약속 시간, 할일은 마감일 기준으로 Google 캘린더 작성 화면을 엽니다.</Text>
+        <View style={styles.workspacePanel}>
+          <View style={styles.workspacePanelTop}>
+            <View style={styles.workspaceTitleWrap}>
+              <Text style={styles.workspaceLabel}>현재 워크스페이스</Text>
+              <Text style={styles.workspaceName} numberOfLines={1}>{workspace?.name || '선택된 워크스페이스 없음'}</Text>
+            </View>
+            {switchingWorkspaceId ? <ActivityIndicator size="small" color={COLORS.primary} /> : null}
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.workspaceChipRow}>
+            {workspaces.map((item) => {
+              const isActive = String(item.id) === String(workspace?.id);
+              const isSwitching = String(item.id) === String(switchingWorkspaceId);
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  style={[styles.workspaceChip, isActive && styles.workspaceChipActive]}
+                  onPress={() => handleSelectWorkspace(item.id)}
+                  activeOpacity={0.82}
+                  disabled={Boolean(switchingWorkspaceId)}
+                >
+                  {isActive ? <Ionicons name="checkmark-circle" size={15} color={COLORS.primary} /> : null}
+                  <Text style={[styles.workspaceChipText, isActive && styles.workspaceChipTextActive]} numberOfLines={1}>
+                    {isSwitching ? '변경 중' : item.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+
+        <View style={styles.notionCard}>
+          <View style={styles.notionTop}>
+            <View style={styles.notionIconWrap}>
+              <Ionicons name="calendar-clear-outline" size={22} color={COLORS.primary} />
+            </View>
+            <View style={styles.notionCopy}>
+              <Text style={styles.notionTitle}>{notionConnected ? 'Notion 연결됨' : 'Notion 연결 대기'}</Text>
+              <Text style={styles.notionDesc}>계정을 승인하면 앱에서 Notion 연결 상태를 관리할 수 있습니다.</Text>
             </View>
           </View>
-          <TouchableOpacity style={styles.primaryBtn} onPress={handleExport} activeOpacity={0.85}>
-            <Ionicons name="open-outline" size={18} color="#FFFFFF" />
-            <Text style={styles.primaryBtnText}>캘린더 링크 열기</Text>
+          <TouchableOpacity
+            style={[styles.notionBtn, notionConnected && styles.notionBtnConnected, isNotionBusy && styles.disabledButton]}
+            onPress={handleExport}
+            activeOpacity={0.85}
+            disabled={isNotionBusy}
+          >
+            {isNotionBusy ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Ionicons name={notionConnected ? 'cloud-upload-outline' : 'link-outline'} size={18} color="#FFFFFF" />
+            )}
+            <Text style={styles.notionBtnText}>{isNotionBusy ? '처리 중' : notionButtonLabel}</Text>
           </TouchableOpacity>
         </View>
 
-        <View style={styles.statsRow}>
-          <Stat label="일정" value={calendarEvents.length} />
-          <Stat label="할일" value={calendarTasks.length} />
-          <Stat label="진행" value={taskStats.inProgress ?? calendarTasks.filter((task) => task.statusCode === 'IN_PROGRESS').length} />
-          <Stat label="완료" value={taskStats.done ?? calendarTasks.filter((task) => task.statusCode === 'DONE').length} />
-        </View>
-
-        <Text style={styles.sectionTitle}>일정</Text>
-        <View style={styles.dayCard}>
-          <TextInput style={styles.input} placeholder="일정 제목" value={eventForm.title} onChangeText={(title) => setEventForm((prev) => ({ ...prev, title }))} />
-          <View style={styles.formRow}>
-            <TextInput style={[styles.input, styles.formInput]} placeholder="2026-06-01" value={eventForm.date} onChangeText={(date) => setEventForm((prev) => ({ ...prev, date }))} />
-            <TextInput style={[styles.input, styles.timeInput]} placeholder="10:00" value={eventForm.startTime} onChangeText={(startTime) => setEventForm((prev) => ({ ...prev, startTime }))} />
-            <TextInput style={[styles.input, styles.timeInput]} placeholder="11:00" value={eventForm.endTime} onChangeText={(endTime) => setEventForm((prev) => ({ ...prev, endTime }))} />
-          </View>
-          <TouchableOpacity style={styles.addBtn} onPress={handleCreateEvent}><Text style={styles.addBtnText}>일정 등록</Text></TouchableOpacity>
-        </View>
-
-        {calendarEvents.length === 0 ? <Empty text="등록된 일정이 없어요" /> : calendarEvents.map((event) => (
-          <View key={event.id} style={styles.dayCard}>
-            <View style={styles.itemRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.itemTitle}>{event.title}</Text>
-                <Text style={styles.itemMeta}>{formatDateTime(event.startAt)} · 관련 할일 {event.relatedTasks?.length || 0}개</Text>
-              </View>
-              <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteEvent(event.id)}><Ionicons name="trash-outline" size={14} color={COLORS.error} /></TouchableOpacity>
+        <View style={styles.monthCalendar}>
+          <View style={styles.monthHeader}>
+            <Text style={styles.monthTitle}>{getMonthTitle(viewMonth)}</Text>
+            <View style={styles.monthNav}>
+              <TouchableOpacity
+                style={styles.monthNavBtn}
+                onPress={() => setViewMonth((current) => addMonths(current, -1))}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="chevron-back" size={24} color={COLORS.subtext} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.monthNavBtn}
+                onPress={() => setViewMonth((current) => addMonths(current, 1))}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="chevron-forward" size={24} color={COLORS.text} />
+              </TouchableOpacity>
             </View>
-            <GoogleButton onPress={() => openGoogleCalendar(event)} />
           </View>
-        ))}
 
-        <Text style={styles.sectionTitle}>할일</Text>
-        {calendarTasks.length === 0 ? (
-          <View style={styles.emptyCard}><Ionicons name="checkmark-circle-outline" size={54} color={COLORS.border} /><Text style={styles.emptyTitle}>등록된 할일이 없어요</Text><Text style={styles.emptyDesc}>회의 분석으로 생성된 할일이나 직접 등록한 할일이 여기에 모입니다.</Text></View>
-        ) : Object.entries(groupedTasks).map(([date, tasks]) => (
-          <View key={date} style={styles.dayCard}>
-            <View style={styles.dayHeader}><Text style={styles.dayTitle}>{date}</Text><Text style={styles.dayCount}>{tasks.length}개</Text></View>
-            {tasks.map((task) => (
-              <View key={task.id} style={styles.taskBlock}>
-                <View style={styles.itemRow}>
-                  <View style={styles.taskDot} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.itemTitle}>{task.title}</Text>
-                    <Text style={styles.itemMeta}>{task.assignee || '담당자 미정'} · {task.source}</Text>
-                    <View style={styles.statusRow}>{STATUS_OPTIONS.map((option) => <TouchableOpacity key={option.code} style={[styles.statusBtn, task.statusCode === option.code && styles.statusBtnActive]} onPress={() => handleUpdateTaskStatus(task.id, option.code)}><Text style={[styles.statusBtnText, task.statusCode === option.code && styles.statusBtnTextActive]}>{option.label}</Text></TouchableOpacity>)}</View>
-                  </View>
-                  <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteTask(task.id)}><Ionicons name="trash-outline" size={14} color={COLORS.error} /></TouchableOpacity>
-                </View>
-                {task.dueDate ? <GoogleButton onPress={() => openGoogleCalendar({ title: task.title, startAt: task.dueDate, description: `담당자: ${task.assignee || '미정'}\n출처: ${task.source}` })} /> : null}
-              </View>
+          <View style={styles.weekRow}>
+            {WEEKDAY_LABELS.map((label) => (
+              <Text key={label} style={styles.weekLabel}>{label}</Text>
             ))}
           </View>
-        ))}
+
+          <View style={styles.monthGrid}>
+            {monthDays.map((day) => {
+              const dayTasks = tasksByDate[day.key] || [];
+              const weekday = day.date.getDay();
+              return (
+                <TouchableOpacity
+                  key={day.key}
+                  style={[
+                    styles.dayCell,
+                    !day.isCurrentMonth && styles.outsideDayCell,
+                    selectedDateKey === day.key && styles.selectedDayCell,
+                  ]}
+                  onPress={() => setSelectedDateKey(day.key)}
+                  activeOpacity={0.78}
+                >
+                  <View style={[styles.dayNumberWrap, day.isToday && styles.todayNumberWrap]}>
+                    <Text
+                      style={[
+                        styles.dayNumber,
+                        weekday === 0 && styles.sundayText,
+                        weekday === 6 && styles.saturdayText,
+                        !day.isCurrentMonth && styles.outsideDayText,
+                        day.isToday && styles.todayNumberText,
+                      ]}
+                    >
+                      {day.date.getDate()}
+                    </Text>
+                  </View>
+                  <View style={styles.dayTaskList}>
+                    {dayTasks.slice(0, 3).map((task, index) => {
+                      const tone = getTaskTone(task, index);
+                      return (
+                        <View
+                          key={task.id}
+                          style={[
+                            styles.dayTaskPill,
+                            { backgroundColor: tone.background, borderLeftColor: tone.border },
+                          ]}
+                        >
+                          <Text style={[styles.dayTaskText, { color: tone.text }]} numberOfLines={1}>
+                            {task.title}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                    {dayTasks.length > 3 ? (
+                      <Text style={styles.moreTasksText}>+{dayTasks.length - 3}</Text>
+                    ) : null}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
+        <View style={styles.monthTasksSection}>
+          <TouchableOpacity
+            style={styles.monthTasksToggle}
+            onPress={() => setIsMonthTasksOpen((current) => !current)}
+            activeOpacity={0.82}
+          >
+            <View style={styles.monthTasksToggleText}>
+              <Text style={styles.sectionTitle}>{viewMonth.getMonth() + 1}월 해야 할 일 전체보기</Text>
+              <Text style={styles.sectionCount}>{monthTasks.length}개</Text>
+            </View>
+            <Ionicons name={isMonthTasksOpen ? 'chevron-up' : 'chevron-down'} size={20} color={COLORS.subtext} />
+          </TouchableOpacity>
+
+          {isMonthTasksOpen ? (
+            monthTasks.length === 0 ? (
+              <EmptyState text="이번 달 마감 할일이 없습니다." />
+            ) : (
+              <View style={styles.monthTaskList}>
+                {monthTasks.map((task, index) => (
+                  <TaskDetailItem
+                    key={task.id}
+                    task={task}
+                    toneIndex={index}
+                    onStatusChange={handleUpdateTaskStatus}
+                    onDelete={handleDeleteTask}
+                  />
+                ))}
+              </View>
+            )
+          ) : null}
+        </View>
       </ScrollView>
+
+      <Modal
+        visible={Boolean(selectedDateKey)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedDateKey(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setSelectedDateKey(null)}
+        >
+          <View style={styles.modalCard} onStartShouldSetResponder={() => true}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>{selectedDateKey ? getDateLabel(selectedDateKey) : ''}</Text>
+                <Text style={styles.modalSubtitle}>{selectedDayTasks.length}개 할일</Text>
+              </View>
+              <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setSelectedDateKey(null)}>
+                <Ionicons name="close" size={20} color={COLORS.subtext} />
+              </TouchableOpacity>
+            </View>
+
+            {selectedDayTasks.length === 0 ? (
+              <EmptyState text="이 날짜에 등록된 할일이 없습니다." />
+            ) : (
+              <ScrollView
+                style={styles.modalTaskScroll}
+                contentContainerStyle={styles.modalTaskScrollContent}
+                showsVerticalScrollIndicator={false}
+              >
+                {selectedDayTasks.map((task, index) => (
+                  <TaskDetailItem
+                    key={task.id}
+                    task={task}
+                    toneIndex={index}
+                    variant="modal"
+                    onStatusChange={handleUpdateTaskStatus}
+                    onDelete={handleDeleteTask}
+                  />
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-function Stat({ label, value }) {
-  return <View style={styles.statBox}><Text style={styles.statValue}>{value}</Text><Text style={styles.statLabel}>{label}</Text></View>;
+function TaskDetailItem({ task, toneIndex = 0, variant = 'list', onStatusChange, onDelete }) {
+  const tone = getTaskTone(task, toneIndex);
+  const dateKey = getTaskDateKey(task);
+
+  return (
+    <View
+      style={[
+        styles.taskItem,
+        variant === 'modal' && styles.modalTaskItem,
+        { borderLeftColor: tone.border },
+      ]}
+    >
+      <View style={styles.taskContent}>
+        <View style={styles.taskTitleRow}>
+          <Text style={styles.taskTitle} numberOfLines={2}>{task.title}</Text>
+          <View style={[styles.statusChip, { backgroundColor: tone.background }]}>
+            <Text style={[styles.statusChipText, { color: tone.text }]}>{getStatusLabel(task.statusCode)}</Text>
+          </View>
+        </View>
+        <Text style={styles.taskMeta} numberOfLines={1}>
+          {dateKey || '마감일 미정'} · {task.assignee || '담당자 미정'} · {task.source || '할일'}
+        </Text>
+        <View style={styles.statusRow}>
+          {STATUS_OPTIONS.map((option) => (
+            <TouchableOpacity
+              key={option.code}
+              style={[styles.statusBtn, task.statusCode === option.code && styles.statusBtnActive]}
+              onPress={() => onStatusChange(task.id, option.code)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.statusBtnText, task.statusCode === option.code && styles.statusBtnTextActive]}>
+                {option.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+      <TouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(task.id)} activeOpacity={0.8}>
+        <Ionicons name="trash-outline" size={15} color={COLORS.error} />
+      </TouchableOpacity>
+    </View>
+  );
 }
 
-function Empty({ text }) {
-  return <View style={styles.emptySlim}><Text style={styles.emptyTitle}>{text}</Text></View>;
-}
-
-function GoogleButton({ onPress }) {
-  return <TouchableOpacity style={styles.googleBtn} onPress={onPress} activeOpacity={0.85}><Ionicons name="logo-google" size={16} color="#FFFFFF" /><Text style={styles.googleBtnText}>Google 캘린더로 열기</Text></TouchableOpacity>;
+function EmptyState({ text }) {
+  return (
+    <View style={styles.emptyState}>
+      <Ionicons name="calendar-outline" size={34} color={COLORS.border} />
+      <Text style={styles.emptyStateText}>{text}</Text>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.background },
-  scrollContent: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 40 },
+  scrollContent: { paddingHorizontal: 18, paddingTop: 16, paddingBottom: 40 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  headerTitle: { fontSize: 24, fontWeight: '700', color: COLORS.text, letterSpacing: 0 },
+  headerTitle: { fontSize: 24, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
   headerBadge: { backgroundColor: '#EEF2FF', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
   headerBadgeText: { color: COLORS.primary, fontWeight: '700', fontSize: 12 },
-  exportCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 18, marginBottom: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 3 },
-  exportTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  iconWrap: { width: 46, height: 46, borderRadius: 13, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
-  cardTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
-  cardDesc: { fontSize: 12, color: COLORS.subtext, lineHeight: 18, marginTop: 3 },
-  primaryBtn: { marginTop: 16, height: 48, borderRadius: 12, backgroundColor: COLORS.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  primaryBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
-  statsRow: { flexDirection: 'row', gap: 8, marginBottom: 18 },
-  statBox: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 12, paddingVertical: 10, alignItems: 'center' },
-  statValue: { color: COLORS.text, fontSize: 18, fontWeight: '700' },
-  statLabel: { color: COLORS.subtext, fontSize: 10, marginTop: 2 },
-  sectionTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 12, marginTop: 8 },
-  input: { backgroundColor: '#F1F5F9', borderRadius: 10, height: 42, paddingHorizontal: 12, color: COLORS.text, marginBottom: 8 },
-  formRow: { flexDirection: 'row', gap: 8 },
-  formInput: { flex: 1 },
-  timeInput: { width: 70 },
-  addBtn: { height: 42, borderRadius: 11, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
-  addBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
-  emptyCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 32, alignItems: 'center' },
-  emptySlim: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 18, marginBottom: 12 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: COLORS.subtext, marginTop: 4 },
-  emptyDesc: { fontSize: 12, color: '#A0AEC0', lineHeight: 18, textAlign: 'center', marginTop: 6 },
-  dayCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
-  dayHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  dayTitle: { fontSize: 15, fontWeight: '700', color: COLORS.primary },
-  dayCount: { fontSize: 12, color: COLORS.subtext, fontWeight: '600' },
-  itemRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  itemTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text },
-  itemMeta: { fontSize: 11, color: COLORS.subtext, marginTop: 3 },
-  googleBtn: { height: 40, borderRadius: 11, backgroundColor: COLORS.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 10 },
-  googleBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 13 },
-  taskBlock: { paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#F1F5F9' },
-  taskDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.success, marginTop: 5 },
-  statusRow: { flexDirection: 'row', gap: 5, marginTop: 7 },
-  statusBtn: { borderRadius: 7, paddingHorizontal: 7, paddingVertical: 3, backgroundColor: '#F1F5F9' },
+  workspacePanel: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  workspacePanelTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  workspaceTitleWrap: { flex: 1, minWidth: 0 },
+  workspaceLabel: { fontSize: 11, fontWeight: '800', color: COLORS.primary, letterSpacing: 0 },
+  workspaceName: { fontSize: 17, fontWeight: '800', color: COLORS.text, marginTop: 3, letterSpacing: 0 },
+  workspaceChipRow: { gap: 8, paddingTop: 12, paddingRight: 2 },
+  workspaceChip: { minHeight: 36, maxWidth: 180, borderRadius: 8, backgroundColor: '#F1F5F9', paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  workspaceChipActive: { backgroundColor: '#EEF2FF', borderWidth: 1, borderColor: COLORS.primary },
+  workspaceChipText: { fontSize: 12, color: COLORS.subtext, fontWeight: '800', letterSpacing: 0 },
+  workspaceChipTextActive: { color: COLORS.primary },
+  notionCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 8,
+    padding: 18,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  notionTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  notionIconWrap: { width: 46, height: 46, borderRadius: 8, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  notionCopy: { flex: 1 },
+  notionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text, letterSpacing: 0 },
+  notionDesc: { fontSize: 12, color: COLORS.subtext, lineHeight: 18, marginTop: 3 },
+  notionBtn: { marginTop: 16, minHeight: 48, borderRadius: 8, backgroundColor: COLORS.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 12 },
+  notionBtnConnected: { backgroundColor: COLORS.secondary },
+  notionBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15, letterSpacing: 0 },
+  disabledButton: { opacity: 0.7 },
+  monthCalendar: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingTop: 18,
+    paddingBottom: 12,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  monthHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
+  monthTitle: { fontSize: 26, fontWeight: '800', color: '#020617', letterSpacing: 0 },
+  monthNav: { flexDirection: 'row', gap: 10 },
+  monthNavBtn: { width: 48, height: 48, borderRadius: 8, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  weekRow: { flexDirection: 'row', marginBottom: 8 },
+  weekLabel: { width: `${100 / 7}%`, textAlign: 'center', color: '#8C8C8C', fontSize: 15, fontWeight: '700', letterSpacing: 0 },
+  monthGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  dayCell: { width: `${100 / 7}%`, minHeight: 92, paddingHorizontal: 2, paddingTop: 5, borderRadius: 6 },
+  outsideDayCell: { opacity: 0.42 },
+  selectedDayCell: { backgroundColor: '#F8FAFC' },
+  dayNumberWrap: { height: 25, alignItems: 'center', justifyContent: 'center', alignSelf: 'center', minWidth: 25, borderRadius: 13 },
+  todayNumberWrap: { backgroundColor: '#2EA9E8' },
+  dayNumber: { fontSize: 18, fontWeight: '700', color: '#0F172A', letterSpacing: 0 },
+  sundayText: { color: '#D64B44' },
+  saturdayText: { color: '#1F83B5' },
+  outsideDayText: { color: '#A3A3A3' },
+  todayNumberText: { color: '#FFFFFF' },
+  dayTaskList: { marginTop: 5, gap: 3 },
+  dayTaskPill: { minHeight: 20, borderRadius: 4, borderLeftWidth: 4, justifyContent: 'center', paddingLeft: 3, paddingRight: 2 },
+  dayTaskText: { fontSize: 9, fontWeight: '800', letterSpacing: 0 },
+  moreTasksText: { fontSize: 9, color: COLORS.subtext, fontWeight: '700', textAlign: 'center', marginTop: 1 },
+  monthTasksSection: { marginBottom: 10 },
+  monthTasksToggle: { minHeight: 54, borderRadius: 8, backgroundColor: COLORS.surface, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  monthTasksToggleText: { flexDirection: 'row', alignItems: 'baseline', gap: 8, flex: 1 },
+  sectionTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
+  sectionCount: { fontSize: 12, color: COLORS.subtext, fontWeight: '700' },
+  monthTaskList: { marginTop: 10, gap: 10 },
+  taskItem: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 8,
+    borderLeftWidth: 5,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  modalTaskItem: { backgroundColor: '#F8FAFC', shadowOpacity: 0, elevation: 0 },
+  taskContent: { flex: 1, minWidth: 0 },
+  taskTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  taskTitle: { flex: 1, fontSize: 14, lineHeight: 20, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
+  statusChip: { borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
+  statusChipText: { fontSize: 10, fontWeight: '800', letterSpacing: 0 },
+  taskMeta: { fontSize: 11, color: COLORS.subtext, marginTop: 6, letterSpacing: 0 },
+  statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
+  statusBtn: { borderRadius: 6, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: '#F1F5F9' },
   statusBtnActive: { backgroundColor: '#EEF2FF' },
-  statusBtnText: { fontSize: 10, color: COLORS.subtext, fontWeight: '700' },
+  statusBtnText: { fontSize: 11, color: COLORS.subtext, fontWeight: '800', letterSpacing: 0 },
   statusBtnTextActive: { color: COLORS.primary },
-  deleteBtn: { width: 30, height: 30, borderRadius: 8, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center' },
+  deleteBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center' },
+  emptyState: { backgroundColor: COLORS.surface, borderRadius: 8, paddingVertical: 26, paddingHorizontal: 18, alignItems: 'center', marginTop: 10 },
+  emptyStateText: { color: COLORS.subtext, fontSize: 13, fontWeight: '700', marginTop: 8, textAlign: 'center', letterSpacing: 0 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.36)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 22 },
+  modalCard: { width: '100%', maxHeight: '74%', backgroundColor: 'rgba(255, 255, 255, 0.94)', borderRadius: 8, padding: 18, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.9)' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14 },
+  modalTitle: { fontSize: 22, fontWeight: '900', color: '#020617', letterSpacing: 0 },
+  modalSubtitle: { fontSize: 12, color: COLORS.subtext, fontWeight: '700', marginTop: 5 },
+  modalCloseBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  modalTaskScroll: { maxHeight: 420 },
+  modalTaskScrollContent: { gap: 10, paddingBottom: 2 },
 });

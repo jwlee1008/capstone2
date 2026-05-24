@@ -1,53 +1,92 @@
+import * as SecureStore from 'expo-secure-store';
+
 const DEFAULT_BASE_URL = 'http://localhost:8080';
 const REQUEST_TIMEOUT_MS = 12000;
 const UPLOAD_TIMEOUT_MS = 120000;
 const TRANSCRIBE_TIMEOUT_MS = 12 * 60 * 1000;
-const ANALYZE_TIMEOUT_MS = 180000;
 
 let accessToken = null;
 let refreshToken = null;
-let authExpiredHandler = null;
+const memoryStorage = {};
+
+function getWebStorage() {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+async function canUseSecureStore() {
+  try {
+    return await SecureStore.isAvailableAsync();
+  } catch {
+    return false;
+  }
+}
 
 const storage = {
-  get(key) {
+  getSync(key) {
     try {
-      return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+      return getWebStorage()?.getItem(key) || memoryStorage[key] || null;
     } catch {
-      return null;
+      return memoryStorage[key] || null;
     }
   },
+  async get(key) {
+    const webValue = this.getSync(key);
+    if (webValue) return webValue;
+    if (await canUseSecureStore()) {
+      try {
+        const secureValue = await SecureStore.getItemAsync(key);
+        if (secureValue) memoryStorage[key] = secureValue;
+        return secureValue;
+      } catch {
+        return null;
+      }
+    }
+    return memoryStorage[key] || null;
+  },
   set(key, value) {
+    memoryStorage[key] = value;
     try {
-      if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
+      getWebStorage()?.setItem(key, value);
     } catch {}
+    canUseSecureStore().then((available) => {
+      if (available) SecureStore.setItemAsync(key, value).catch(() => {});
+    });
   },
   remove(key) {
+    delete memoryStorage[key];
     try {
-      if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
+      getWebStorage()?.removeItem(key);
     } catch {}
+    canUseSecureStore().then((available) => {
+      if (available) SecureStore.deleteItemAsync(key).catch(() => {});
+    });
   },
 };
 
-const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL || storage.get('API_BASE_URL');
+export const persistentStorage = storage;
+
+const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL || storage.getSync('API_BASE_URL');
 export const API_BASE_URL =
   configuredBaseUrl === 'same-origin' ? '' : configuredBaseUrl || DEFAULT_BASE_URL;
 
-function createApiError(message, details = {}) {
-  const error = new Error(message);
-  Object.assign(error, details);
-  return error;
-}
-
 export function setTokens(tokens = {}) {
-  accessToken = tokens.accessToken || null;
-  refreshToken = tokens.refreshToken || null;
+  if (Object.prototype.hasOwnProperty.call(tokens, 'accessToken')) {
+    accessToken = tokens.accessToken || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(tokens, 'refreshToken')) {
+    refreshToken = tokens.refreshToken || null;
+  }
   if (accessToken) storage.set('accessToken', accessToken);
   if (refreshToken) storage.set('refreshToken', refreshToken);
 }
 
-export function restoreTokens() {
-  accessToken = accessToken || storage.get('accessToken');
-  refreshToken = refreshToken || storage.get('refreshToken');
+export async function restoreTokens() {
+  accessToken = accessToken || await storage.get('accessToken');
+  refreshToken = refreshToken || await storage.get('refreshToken');
   return { accessToken, refreshToken };
 }
 
@@ -56,10 +95,6 @@ export function clearTokens() {
   refreshToken = null;
   storage.remove('accessToken');
   storage.remove('refreshToken');
-}
-
-export function setAuthExpiredHandler(handler) {
-  authExpiredHandler = typeof handler === 'function' ? handler : null;
 }
 
 async function parseResponse(response) {
@@ -73,7 +108,7 @@ async function parseResponse(response) {
 }
 
 async function request(path, options = {}, retry = true) {
-  restoreTokens();
+  await restoreTokens();
   const { timeoutMs, ...fetchOptions } = options;
   const isFormData = options.body instanceof FormData;
   const controller = new AbortController();
@@ -91,15 +126,9 @@ async function request(path, options = {}, retry = true) {
   } catch (error) {
     console.error('[api] network error', options.method || 'GET', `${API_BASE_URL}${path}`, error);
     if (error?.name === 'AbortError') {
-      throw createApiError(`백엔드 응답이 없습니다. IntelliJ에서 서버가 켜져 있는지 확인해주세요. (${API_BASE_URL})`, {
-        isBackendUnavailable: true,
-        isNetworkError: true,
-      });
+      throw new Error(`백엔드 응답이 없습니다. IntelliJ에서 서버가 켜져 있는지 확인해주세요. (${API_BASE_URL})`);
     }
-    throw createApiError(`백엔드에 연결할 수 없습니다. IntelliJ 서버와 API 주소를 확인해주세요. (${API_BASE_URL})`, {
-      isBackendUnavailable: true,
-      isNetworkError: true,
-    });
+    throw new Error(`백엔드에 연결할 수 없습니다. IntelliJ 서버와 API 주소를 확인해주세요. (${API_BASE_URL})`);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -111,26 +140,15 @@ async function request(path, options = {}, retry = true) {
 
   const data = await parseResponse(response);
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith('/api/auth/')) {
-      clearTokens();
-      authExpiredHandler?.();
-    }
-    const message = data?.error || data?.message || data?.errors || data || `HTTP ${response.status}`;
+    const message = data?.message || data || `HTTP ${response.status}`;
     console.error('[api] request failed', options.method || 'GET', `${API_BASE_URL}${path}`, response.status, data);
-    throw createApiError(String(message), {
-      status: response.status,
-      isBackendUnavailable: response.status === 502 && String(message).startsWith('Cannot reach'),
-    });
+    throw new Error(String(message));
   }
   return data;
 }
 
 function getAssetName(asset) {
   return asset?.name || asset?.file?.name || 'recording.m4a';
-}
-
-function getUploadAssetName(asset, fallback = 'upload.bin') {
-  return asset?.name || asset?.file?.name || fallback;
 }
 
 function inferAudioContentType(filename, fallback) {
@@ -143,22 +161,6 @@ function inferAudioContentType(filename, fallback) {
   if (ext === 'ogg') return 'audio/ogg';
   if (ext === 'webm') return 'audio/webm';
   return 'audio/mp4';
-}
-
-function inferImageContentType(filename, fallback) {
-  if (fallback) return fallback;
-  const ext = String(filename || '').split('.').pop()?.toLowerCase();
-  if (ext === 'png') return 'image/png';
-  if (ext === 'webp') return 'image/webp';
-  if (ext === 'gif') return 'image/gif';
-  return 'image/jpeg';
-}
-
-async function getUploadBody(asset) {
-  if (asset?.file) return asset.file;
-  if (!asset?.uri) throw new Error('업로드할 파일을 찾을 수 없습니다.');
-  const response = await fetch(asset.uri);
-  return response.blob();
 }
 
 async function appendRecordingFile(formData, asset) {
@@ -207,6 +209,16 @@ export const api = {
     return request('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
+    }).then((data) => {
+      setTokens(data);
+      return data;
+    });
+  },
+
+  googleLogin(code) {
+    return request('/api/oauth2/google/callback', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
     }).then((data) => {
       setTokens(data);
       return data;
@@ -271,6 +283,10 @@ export const api = {
     });
   },
 
+  leaveWorkspace(workspaceId) {
+    return request(`/api/workspaces/${workspaceId}/members/me`, { method: 'DELETE' });
+  },
+
   searchUsers(query) {
     return request(`/api/user/search?q=${encodeURIComponent(query)}`);
   },
@@ -280,10 +296,10 @@ export const api = {
     return request(`/api/meetings${query}`);
   },
 
-  createMeeting({ workspaceId, title, description }) {
+  createMeeting({ workspaceId, title }) {
     return request('/api/meetings', {
       method: 'POST',
-      body: JSON.stringify({ workspaceId, title, description }),
+      body: JSON.stringify({ workspaceId, title }),
     });
   },
 
@@ -303,10 +319,6 @@ export const api = {
     return request(`/api/recordings?meetingId=${meetingId}`);
   },
 
-  deleteRecording(recordingId) {
-    return request(`/api/recordings/${recordingId}`, { method: 'DELETE' });
-  },
-
   async uploadRecording(meetingId, asset) {
     const formData = new FormData();
     await appendRecordingFile(formData, asset);
@@ -315,6 +327,12 @@ export const api = {
       method: 'POST',
       body: formData,
       timeoutMs: UPLOAD_TIMEOUT_MS,
+    });
+  },
+
+  updateRecordingStatus(recordingId, status) {
+    return request(`/api/recordings/${recordingId}/status?status=${encodeURIComponent(status)}`, {
+      method: 'PATCH',
     });
   },
 
@@ -343,7 +361,6 @@ export const api = {
   analyzeTranscript(transcriptId) {
     return request(`/api/meetings/transcripts/${transcriptId}/gemini-analyze`, {
       method: 'POST',
-      timeoutMs: ANALYZE_TIMEOUT_MS,
     });
   },
 
@@ -387,6 +404,13 @@ export const api = {
     });
   },
 
+  updateEvent(eventId, updates) {
+    return request(`/api/events/${eventId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+  },
+
   deleteEvent(eventId) {
     return request(`/api/events/${eventId}`, { method: 'DELETE' });
   },
@@ -405,21 +429,6 @@ export const api = {
     });
   },
 
-  getProfileImageUploadUrl(filename) {
-    return request(`/api/user/presigned-url?filename=${encodeURIComponent(filename)}`);
-  },
-
-  async uploadToPresignedUrl(presignedUrl, asset, fallbackName = 'upload.bin') {
-    const filename = getUploadAssetName(asset, fallbackName);
-    const contentType = inferImageContentType(filename, asset?.mimeType || asset?.file?.type);
-    const response = await fetch(presignedUrl, {
-      method: 'PUT',
-      headers: { 'Content-Type': contentType },
-      body: await getUploadBody(asset),
-    });
-    if (!response.ok) throw new Error(`파일 업로드에 실패했습니다. HTTP ${response.status}`);
-  },
-
   updatePassword(payload) {
     return request('/api/user/password', {
       method: 'PATCH',
@@ -431,12 +440,41 @@ export const api = {
     return request('/api/user/account', { method: 'DELETE' });
   },
 
-  getGoogleAuthUrl() {
-    return request('/api/oauth2/google/auth-url');
+  getNotionLinkAuthUrl() {
+    return request('/api/oauth2/notion/link/auth-url');
   },
 
-  syncWorkspaceToGoogleCalendar(workspaceId) {
-    return request(`/api/calendar/workspaces/${workspaceId}/google-sync`, {
+  getNotionStatus() {
+    return request('/api/oauth2/notion/status');
+  },
+
+  linkNotionAccount(code) {
+    return request('/api/oauth2/notion/link', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+  },
+
+  createNotionCalendarTarget(payload = {}) {
+    return request('/api/oauth2/notion/calendar-targets', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getNotionCalendarTargets() {
+    return request('/api/oauth2/notion/calendar-targets');
+  },
+
+  setNotionCalendarDatabase(payload) {
+    return request('/api/oauth2/notion/calendar-database', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  syncWorkspaceToNotion(workspaceId) {
+    return request(`/api/calendar/workspaces/${workspaceId}/notion-sync`, {
       method: 'POST',
     });
   },
