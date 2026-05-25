@@ -275,6 +275,8 @@ function mapTask(raw) {
     meetingId: raw.meetingId,
     workspaceId: raw.workspaceId,
     createdBy: raw.createdBy,
+    notionPageId: raw.notionPageId,
+    notionSyncedAt: raw.notionSyncedAt,
   };
 }
 
@@ -738,6 +740,9 @@ export function AppProvider({ children }) {
   };
 
   const deleteCalendarTask = async (taskId) => {
+    if (notionConnected && isUsableNotionCalendarStatus(notionStatus)) {
+      await api.deleteTaskFromNotion(taskId);
+    }
     await api.deleteTask(taskId);
     setCalendarTasks((prev) => {
       const nextTasks = prev.filter((task) => String(task.id) !== String(taskId));
@@ -811,6 +816,7 @@ export function AppProvider({ children }) {
         disconnectedAt: new Date().toISOString(),
       }));
     }
+    resetSyncedNotionEventIds();
     setNotionConnected(false);
     setNotionStatus((prev) => buildLocallyDisconnectedStatus(prev || {}));
   };
@@ -818,61 +824,54 @@ export function AppProvider({ children }) {
   const syncNotionCalendar = async () => {
     if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
     await ensureNotionCalendarReady();
-    const taskBackedEvents = getTaskBackedNotionEventIds(calendarTasks, calendarEvents);
-    const uniqueEventIds = Array.from(new Set(taskBackedEvents.eventIds));
-    const syncedIds = await getSyncedNotionEventIds();
-    const unsyncedIds = uniqueEventIds.filter((id) => !syncedIds.has(id));
+    const workspaceTasks = calendarTasks.filter((task) => (
+      String(task?.workspaceId) === String(workspace.id)
+    ));
+    const taskIds = Array.from(new Set(workspaceTasks
+      .filter((task) => task?.dueDate)
+      .map((task) => Number(task?.id))
+      .filter(Number.isFinite)));
+    const unmatchedTaskCount = workspaceTasks.filter((task) => !task?.dueDate).length;
 
-    if (uniqueEventIds.length === 0) {
+    if (taskIds.length === 0) {
       setNotionConnected(true);
       await refreshNotionStatus().catch(() => null);
       return {
         syncedCount: 0,
         skippedCount: 0,
-        ...taskBackedEvents,
+        taskCount: workspaceTasks.length,
+        selectedTaskCount: 0,
+        unmatchedTaskCount,
         noTaskBackedEvents: true,
       };
     }
 
-    if (unsyncedIds.length === 0) {
-      setNotionConnected(true);
-      await refreshNotionStatus().catch(() => null);
-      return {
-        syncedCount: 0,
-        skippedCount: uniqueEventIds.length,
-        ...taskBackedEvents,
-        alreadySynced: true,
-      };
-    }
+    const result = await api.syncTasksToNotion(taskIds);
+    const resultRows = normalizeList(result?.results);
+    const successfulRows = resultRows.filter((item) => item.status === 'SUCCESS');
+    const skippedCount = resultRows.filter((item) => String(item.status || '').startsWith('SKIPPED')).length;
+    const failedCount = resultRows.filter((item) => item.status && !['SUCCESS', 'SKIPPED_NO_DUE_DATE'].includes(item.status)).length;
 
-    const numericUnsyncedIds = unsyncedIds.map((id) => Number(id)).filter(Number.isFinite);
-    if (numericUnsyncedIds.length === 0) {
-      setNotionConnected(true);
-      await refreshNotionStatus().catch(() => null);
-      return {
-        syncedCount: 0,
-        skippedCount: uniqueEventIds.length,
-        ...taskBackedEvents,
-        alreadySynced: true,
-      };
-    }
-
-    const result = await api.syncEventsToNotion(numericUnsyncedIds);
-    const successfulIds = normalizeList(result?.results)
-      .filter((item) => !item.status || item.status === 'SUCCESS')
-      .map((item) => String(item.eventId))
-      .filter(Boolean);
-    if (successfulIds.length > 0) {
-      successfulIds.forEach((id) => syncedIds.add(id));
-      saveSyncedNotionEventIds(syncedIds);
+    if (successfulRows.length > 0) {
+      const syncedAt = new Date().toISOString();
+      const notionPageIdsByTaskId = new Map(successfulRows
+        .map((item) => [String(item.taskId), item.notionPageId])
+        .filter(([, notionPageId]) => notionPageId));
+      setCalendarTasks((prev) => prev.map((task) => {
+        const notionPageId = notionPageIdsByTaskId.get(String(task.id));
+        return notionPageId ? { ...task, notionPageId, notionSyncedAt: syncedAt } : task;
+      }));
     }
     setNotionConnected(true);
     await refreshNotionStatus().catch(() => null);
     return {
       ...result,
-      syncedCount: successfulIds.length || result?.syncedCount || 0,
-      skippedCount: uniqueEventIds.length - unsyncedIds.length,
-      ...taskBackedEvents,
+      syncedCount: successfulRows.length || result?.syncedCount || 0,
+      skippedCount,
+      failedCount,
+      taskCount: workspaceTasks.length,
+      selectedTaskCount: taskIds.length,
+      unmatchedTaskCount,
     };
   };
 

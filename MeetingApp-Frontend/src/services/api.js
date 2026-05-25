@@ -490,4 +490,19 @@ export const api = {
       timeoutMs: NOTION_SYNC_TIMEOUT_MS,
     });
   },
+
+  syncTasksToNotion(taskIds = []) {
+    return request('/api/calendar/tasks/notion-sync-batch', {
+      method: 'POST',
+      body: JSON.stringify({ taskIds }),
+      timeoutMs: NOTION_SYNC_TIMEOUT_MS,
+    });
+  },
+
+  deleteTaskFromNotion(taskId) {
+    return request(`/api/calendar/tasks/${taskId}/notion-sync`, {
+      method: 'DELETE',
+      timeoutMs: NOTION_SYNC_TIMEOUT_MS,
+    });
+  },
 };

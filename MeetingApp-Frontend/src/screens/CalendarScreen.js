@@ -352,6 +352,9 @@ export default function CalendarScreen() {
 
     let settled = false;
     let timer = null;
+    let callbackInProgress = false;
+    let popupClosedAt = null;
+    let pollInProgress = false;
     const finish = async (handled) => {
       if (settled) return;
       settled = true;
@@ -368,27 +371,49 @@ export default function CalendarScreen() {
       const params = new URLSearchParams();
       if (data.code) params.set('code', data.code);
       if (data.error) params.set('error', data.error);
-      const handled = await completeNotionFromUrl(`meetflow://notion/link?${params.toString()}`);
-      finish(handled);
+      callbackInProgress = true;
+      try {
+        const handled = await completeNotionFromUrl(`meetflow://notion/link?${params.toString()}`);
+        finish(handled);
+      } finally {
+        callbackInProgress = false;
+      }
     }
 
     window.addEventListener('message', handleMessage);
 
     timer = window.setInterval(async () => {
-      let href = '';
+      if (settled || pollInProgress) return;
+      pollInProgress = true;
       try {
-        href = popup.location?.href || '';
-      } catch {}
+        let href = '';
+        try {
+          href = popup.location?.href || '';
+        } catch {}
 
       if (href) {
-        const handled = await completeNotionFromUrl(href);
-        if (handled) {
-          finish(true);
-          return;
+        popupClosedAt = null;
+        callbackInProgress = true;
+        try {
+          const handled = await completeNotionFromUrl(href);
+          if (handled) {
+            finish(true);
+            return;
+          }
+        } finally {
+          callbackInProgress = false;
         }
       }
 
+      if (settled) return;
       if (popup.closed) {
+        if (callbackInProgress || pendingNotionCodeRef.current) return;
+        if (!popupClosedAt) {
+          popupClosedAt = Date.now();
+          return;
+        }
+        if (Date.now() - popupClosedAt < 1500) return;
+
         const pasted = window.prompt('Notion 승인 후 앱으로 돌아오지 않으면 meetflow:// 주소 또는 인증 code를 붙여넣어 주세요.');
         if (!pasted) {
           finish(false);
@@ -396,6 +421,9 @@ export default function CalendarScreen() {
         }
         const handled = await completeNotionFromUrl(pasted);
         finish(handled || await completeNotionFromUrl(`meetflow://notion/link?code=${encodeURIComponent(pasted.trim())}`));
+      }
+      } finally {
+        pollInProgress = false;
       }
     }, 500);
   });
@@ -437,7 +465,25 @@ export default function CalendarScreen() {
     }
   };
 
+  const runDisconnectNotion = async () => {
+    try {
+      setNotionAction('disconnect');
+      await disconnectNotionCalendar?.();
+      Alert.alert('연동 취소 완료', 'Notion을 다시 연결할 수 있습니다.');
+    } catch (error) {
+      Alert.alert('연동 취소 실패', error?.message || 'Notion 연동 상태를 변경하지 못했습니다.');
+    } finally {
+      setNotionAction(null);
+    }
+  };
+
   const handleDisconnectNotion = async () => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (!window.confirm('Notion 연동을 취소할까요?')) return;
+      await runDisconnectNotion();
+      return;
+    }
+
     Alert.alert(
       'Notion 연동 취소',
       '앱에서 Notion 연동 상태를 해제합니다. 다시 연결할 수 있습니다.',
