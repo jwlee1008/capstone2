@@ -4,6 +4,8 @@ import { api, clearTokens, persistentStorage, restoreTokens } from '../services/
 
 const AppContext = createContext(null);
 const LAST_WORKSPACE_ID_KEY = 'lastWorkspaceId';
+const NOTION_LOCAL_DISCONNECT_KEY = 'notionLocalDisconnect';
+const NOTION_SYNCED_EVENT_IDS_PREFIX = 'notionSyncedEventIds';
 
 function getWorkspaceId(raw) {
   return raw?.id || raw?.workspaceId || raw?.workspace?.id;
@@ -19,6 +21,136 @@ function normalizeList(data) {
   if (Array.isArray(data?.data)) return data.data;
   if (Array.isArray(data?.items)) return data.items;
   return [];
+}
+
+function getEntityId(raw) {
+  return raw?.id ?? raw?.eventId;
+}
+
+function normalizeSyncText(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function getTaskSyncDate(task) {
+  return task?.dueDate ? String(task.dueDate).slice(0, 10) : '';
+}
+
+function getEventSyncDate(event) {
+  return event?.date || (event?.startAt ? String(event.startAt).slice(0, 10) : '');
+}
+
+function buildSyncKey(title, date, meetingId = '') {
+  const normalizedTitle = normalizeSyncText(title);
+  if (!normalizedTitle || !date) return null;
+  return `${date}|${normalizedTitle}|${meetingId || ''}`;
+}
+
+function buildLooseSyncKey(title, date) {
+  const normalizedTitle = normalizeSyncText(title);
+  if (!normalizedTitle || !date) return null;
+  return `${date}|${normalizedTitle}`;
+}
+
+function groupEventsByTaskKey(events = []) {
+  const exact = new Map();
+  const loose = new Map();
+
+  events.forEach((event) => {
+    const eventId = getEntityId(event);
+    if (eventId == null) return;
+
+    const date = getEventSyncDate(event);
+    const exactKey = buildSyncKey(event.title, date, event.meetingId);
+    const looseKey = buildLooseSyncKey(event.title, date);
+
+    if (exactKey) exact.set(exactKey, [...(exact.get(exactKey) || []), event]);
+    if (looseKey) loose.set(looseKey, [...(loose.get(looseKey) || []), event]);
+  });
+
+  return { exact, loose };
+}
+
+function getTaskBackedNotionEventIds(tasks = [], events = []) {
+  const { exact, loose } = groupEventsByTaskKey(events);
+  const seenTaskKeys = new Set();
+  const usedEventIds = new Set();
+  const matchedEventIds = [];
+  let matchedTaskCount = 0;
+  let duplicateTaskCount = 0;
+  let unmatchedTaskCount = 0;
+
+  tasks.forEach((task) => {
+    const date = getTaskSyncDate(task);
+    const exactKey = buildSyncKey(task.title, date, task.meetingId);
+    const looseKey = buildLooseSyncKey(task.title, date);
+    const dedupeKey = looseKey || exactKey;
+
+    if (!dedupeKey) {
+      unmatchedTaskCount += 1;
+      return;
+    }
+    if (seenTaskKeys.has(dedupeKey)) {
+      duplicateTaskCount += 1;
+      return;
+    }
+    seenTaskKeys.add(dedupeKey);
+
+    const candidates = [
+      ...(exactKey ? exact.get(exactKey) || [] : []),
+      ...(looseKey ? loose.get(looseKey) || [] : []),
+    ];
+    const match = candidates.find((event) => {
+      const eventId = String(getEntityId(event));
+      return eventId && !usedEventIds.has(eventId);
+    });
+
+    if (!match) {
+      unmatchedTaskCount += 1;
+      return;
+    }
+
+    const eventId = String(getEntityId(match));
+    usedEventIds.add(eventId);
+    matchedEventIds.push(eventId);
+    matchedTaskCount += 1;
+  });
+
+  return {
+    eventIds: matchedEventIds,
+    taskCount: tasks.length,
+    selectedTaskCount: matchedTaskCount,
+    duplicateTaskCount,
+    unmatchedTaskCount,
+  };
+}
+
+function buildNotionSyncedEventIdsKey(userId, workspaceId) {
+  return `${NOTION_SYNCED_EVENT_IDS_PREFIX}:${userId || 'anon'}:${workspaceId || 'none'}`;
+}
+
+function parseStoredJson(value, fallback) {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function buildLocallyDisconnectedStatus(status = {}) {
+  return {
+    ...status,
+    linked: false,
+    calendarConfigured: false,
+    calendarName: null,
+    localDisconnected: true,
+  };
+}
+
+function isUsableNotionCalendarStatus(status) {
+  if (!status?.linked) return false;
+  if (!status.calendarConfigured) return false;
+  return Boolean(String(status.calendarName || '').trim());
 }
 
 function normalizeBackendDateTime(value) {
@@ -127,6 +259,7 @@ function mapTranscriptSegment(segment, index) {
 }
 
 function mapTask(raw) {
+  const sourceCode = raw.source || raw.sourceCode;
   return {
     id: raw.id,
     title: raw.title,
@@ -137,7 +270,8 @@ function mapTask(raw) {
     dueDate: raw.dueDate ? String(raw.dueDate).slice(0, 10) : '',
     statusCode: raw.status || 'TODO',
     status: raw.status === 'DONE' ? '완료' : raw.status === 'IN_PROGRESS' ? '진행중' : '등록됨',
-    source: raw.source === 'AI_GENERATED' ? '회의 기록' : '직접 등록',
+    sourceCode,
+    source: sourceCode === 'AI_GENERATED' ? '회의 기록' : '직접 등록',
     meetingId: raw.meetingId,
     workspaceId: raw.workspaceId,
     createdBy: raw.createdBy,
@@ -250,6 +384,42 @@ export function AppProvider({ children }) {
 
   const getMeetingById = (id) => meetings.find((meeting) => String(meeting.id) === String(id));
 
+  const isNotionLocallyDisconnected = async (currentUser = user) => {
+    const currentUserId = currentUser?.id || currentUser?.userId;
+    if (!currentUserId) return false;
+    const record = parseStoredJson(await persistentStorage.get(NOTION_LOCAL_DISCONNECT_KEY), null);
+    return Boolean(record?.userId && String(record.userId) === String(currentUserId));
+  };
+
+  const applyNotionStatus = async (status, currentUser = user, options = {}) => {
+    if (!options.ignoreLocalDisconnect && status?.linked && await isNotionLocallyDisconnected(currentUser)) {
+      const nextStatus = buildLocallyDisconnectedStatus(status);
+      setNotionStatus(nextStatus);
+      setNotionConnected(false);
+      return nextStatus;
+    }
+    setNotionStatus(status);
+    setNotionConnected(Boolean(status?.linked));
+    return status;
+  };
+
+  const getNotionSyncKey = (workspaceId = workspace?.id, currentUser = user) => (
+    buildNotionSyncedEventIdsKey(currentUser?.id || currentUser?.userId, workspaceId)
+  );
+
+  const getSyncedNotionEventIds = async (workspaceId = workspace?.id, currentUser = user) => {
+    const stored = parseStoredJson(await persistentStorage.get(getNotionSyncKey(workspaceId, currentUser)), []);
+    return new Set(Array.isArray(stored) ? stored.map(String) : []);
+  };
+
+  const saveSyncedNotionEventIds = (ids, workspaceId = workspace?.id, currentUser = user) => {
+    persistentStorage.set(getNotionSyncKey(workspaceId, currentUser), JSON.stringify(Array.from(ids).map(String)));
+  };
+
+  const resetSyncedNotionEventIds = (workspaceId = workspace?.id, currentUser = user) => {
+    persistentStorage.remove(getNotionSyncKey(workspaceId, currentUser));
+  };
+
   const loadInvitations = async () => {
     const rows = await api.getInvitations().catch(() => []);
     const mapped = rows.filter((item) => (item.status || 'PENDING') === 'PENDING').map(mapInvitation);
@@ -308,8 +478,10 @@ export function AppProvider({ children }) {
     setCalendarEvents(events.map(mapEvent));
     setTaskStats(countTaskStats(mappedTasks));
     api.getNotionStatus().then((status) => {
-      setNotionStatus(status);
-      setNotionConnected(Boolean(status?.linked));
+      applyNotionStatus(status, currentUser).catch(() => {
+        setNotionStatus(null);
+        setNotionConnected(false);
+      });
     }).catch(() => {
       setNotionStatus(null);
       setNotionConnected(false);
@@ -394,7 +566,7 @@ export function AppProvider({ children }) {
   };
 
   const updateUser = async (updates) => {
-    if (isApiMode && updates.name) await api.updateProfileName(updates.name).catch(() => null);
+    if (isApiMode && updates.name) await api.updateProfileName(updates.name);
     setUser((prev) => ({ ...prev, ...updates }));
   };
 
@@ -591,21 +763,20 @@ export function AppProvider({ children }) {
     setCalendarEvents((prev) => prev.filter((event) => String(event.id) !== String(eventId)));
   };
 
-  const refreshNotionStatus = async () => {
+  const refreshNotionStatus = async (options = {}) => {
     const status = await api.getNotionStatus();
-    setNotionStatus(status);
-    setNotionConnected(Boolean(status?.linked));
-    return status;
+    return applyNotionStatus(status, user, options);
   };
 
-  const ensureNotionCalendarReady = async () => {
-    const status = await refreshNotionStatus().catch(() => null);
+  const ensureNotionCalendarReady = async (options = {}) => {
+    const status = await refreshNotionStatus({ ignoreLocalDisconnect: options.forceCreateTarget }).catch(() => null);
     if (!status?.linked) throw new Error('Notion account is not linked.');
-    if (status.calendarConfigured) return status;
+    if (isUsableNotionCalendarStatus(status) && !options.forceCreateTarget) return status;
 
     const created = await api.createNotionCalendarTarget({
       name: `${workspace?.name || 'MeetFlow'} Calendar`,
     });
+    resetSyncedNotionEventIds();
     const nextStatus = {
       ...status,
       linked: true,
@@ -623,20 +794,86 @@ export function AppProvider({ children }) {
     return data;
   };
 
-  const completeNotionCalendarLink = async (code) => {
+  const completeNotionCalendarLink = async (code, options = {}) => {
     if (!code) throw new Error('Notion 인증 코드가 없습니다.');
     const linked = await api.linkNotionAccount(code);
+    persistentStorage.remove(NOTION_LOCAL_DISCONNECT_KEY);
     setNotionConnected(true);
-    await ensureNotionCalendarReady();
+    await ensureNotionCalendarReady({ forceCreateTarget: Boolean(options.forceCreateTarget) });
     return linked;
+  };
+
+  const disconnectNotionCalendar = async () => {
+    const userId = user?.id || user?.userId;
+    if (userId) {
+      persistentStorage.set(NOTION_LOCAL_DISCONNECT_KEY, JSON.stringify({
+        userId,
+        disconnectedAt: new Date().toISOString(),
+      }));
+    }
+    setNotionConnected(false);
+    setNotionStatus((prev) => buildLocallyDisconnectedStatus(prev || {}));
   };
 
   const syncNotionCalendar = async () => {
     if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
     await ensureNotionCalendarReady();
-    await api.syncWorkspaceToNotion(workspace.id);
+    const taskBackedEvents = getTaskBackedNotionEventIds(calendarTasks, calendarEvents);
+    const uniqueEventIds = Array.from(new Set(taskBackedEvents.eventIds));
+    const syncedIds = await getSyncedNotionEventIds();
+    const unsyncedIds = uniqueEventIds.filter((id) => !syncedIds.has(id));
+
+    if (uniqueEventIds.length === 0) {
+      setNotionConnected(true);
+      await refreshNotionStatus().catch(() => null);
+      return {
+        syncedCount: 0,
+        skippedCount: 0,
+        ...taskBackedEvents,
+        noTaskBackedEvents: true,
+      };
+    }
+
+    if (unsyncedIds.length === 0) {
+      setNotionConnected(true);
+      await refreshNotionStatus().catch(() => null);
+      return {
+        syncedCount: 0,
+        skippedCount: uniqueEventIds.length,
+        ...taskBackedEvents,
+        alreadySynced: true,
+      };
+    }
+
+    const numericUnsyncedIds = unsyncedIds.map((id) => Number(id)).filter(Number.isFinite);
+    if (numericUnsyncedIds.length === 0) {
+      setNotionConnected(true);
+      await refreshNotionStatus().catch(() => null);
+      return {
+        syncedCount: 0,
+        skippedCount: uniqueEventIds.length,
+        ...taskBackedEvents,
+        alreadySynced: true,
+      };
+    }
+
+    const result = await api.syncEventsToNotion(numericUnsyncedIds);
+    const successfulIds = normalizeList(result?.results)
+      .filter((item) => !item.status || item.status === 'SUCCESS')
+      .map((item) => String(item.eventId))
+      .filter(Boolean);
+    if (successfulIds.length > 0) {
+      successfulIds.forEach((id) => syncedIds.add(id));
+      saveSyncedNotionEventIds(syncedIds);
+    }
     setNotionConnected(true);
     await refreshNotionStatus().catch(() => null);
+    return {
+      ...result,
+      syncedCount: successfulIds.length || result?.syncedCount || 0,
+      skippedCount: uniqueEventIds.length - unsyncedIds.length,
+      ...taskBackedEvents,
+    };
   };
 
   const value = useMemo(() => ({
@@ -676,6 +913,7 @@ export function AppProvider({ children }) {
     completeNotionCalendarLink,
     refreshNotionStatus,
     setNotionConnected,
+    disconnectNotionCalendar,
     syncNotionCalendar,
     getMeetingById,
   }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, notionConnected, notionStatus, isApiMode, isRestoringSession]);

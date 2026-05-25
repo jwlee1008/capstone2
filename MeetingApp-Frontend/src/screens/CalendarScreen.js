@@ -21,6 +21,7 @@ import { COLORS } from '../theme';
 
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
 const CALENDAR_VIEW_MONTH_KEY = 'calendarViewMonth';
+const CALENDAR_TASK_COLORS_KEY = 'calendarTaskColors';
 
 const STATUS_OPTIONS = [
   { code: 'TODO', label: '할일' },
@@ -29,13 +30,15 @@ const STATUS_OPTIONS = [
 ];
 
 const TASK_TONES = [
-  { background: '#EEF2FF', border: '#8B91F8', text: '#4F46E5' },
-  { background: '#FFF7E6', border: '#F5C451', text: '#946A22' },
-  { background: '#EAF5FF', border: '#7CC4F8', text: '#2A6F9E' },
-  { background: '#FDEAF2', border: '#E889A8', text: '#93465F' },
-  { background: '#F0F1F5', border: '#9CA3AF', text: '#4B5563' },
-  { background: '#ECFDF5', border: '#6EE7B7', text: '#047857' },
+  { id: 'indigo', background: '#EEF2FF', border: '#8B91F8', text: '#4F46E5' },
+  { id: 'amber', background: '#FFF7E6', border: '#F5C451', text: '#946A22' },
+  { id: 'sky', background: '#EAF5FF', border: '#7CC4F8', text: '#2A6F9E' },
+  { id: 'rose', background: '#FDEAF2', border: '#E889A8', text: '#93465F' },
+  { id: 'gray', background: '#F0F1F5', border: '#9CA3AF', text: '#4B5563' },
+  { id: 'green', background: '#ECFDF5', border: '#6EE7B7', text: '#047857' },
 ];
+const DONE_TASK_TONE = TASK_TONES.find((tone) => tone.id === 'gray');
+const SELECTABLE_TASK_TONES = TASK_TONES.filter((tone) => tone.id !== 'gray');
 
 function getUrlParam(url, key) {
   if (!url) return null;
@@ -133,13 +136,15 @@ function buildMonthDays(monthDate) {
   });
 }
 
-function getTaskTone(task, index = 0) {
-  if (task?.statusCode === 'DONE') return TASK_TONES[4];
+function getTaskTone(task, index = 0, taskColors = {}) {
+  if (task?.statusCode === 'DONE') return DONE_TASK_TONE;
+  const savedTone = SELECTABLE_TASK_TONES.find((tone) => tone.id === taskColors[String(task?.id)]);
+  if (savedTone) return savedTone;
   if (task?.statusCode === 'IN_PROGRESS') return TASK_TONES[2];
 
   const seed = String(task?.id || task?.title || index);
   const hash = seed.split('').reduce((sum, char) => sum + char.charCodeAt(0), index);
-  return TASK_TONES[Math.abs(hash) % TASK_TONES.length];
+  return SELECTABLE_TASK_TONES[Math.abs(hash) % SELECTABLE_TASK_TONES.length];
 }
 
 function getStatusLabel(statusCode) {
@@ -159,6 +164,7 @@ export default function CalendarScreen() {
     completeNotionCalendarLink,
     refreshNotionStatus,
     syncNotionCalendar,
+    disconnectNotionCalendar,
     updateCalendarTask,
     deleteCalendarTask,
   } = useAppContext();
@@ -170,8 +176,12 @@ export default function CalendarScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [switchingWorkspaceId, setSwitchingWorkspaceId] = useState(null);
   const [isCalendarStateReady, setIsCalendarStateReady] = useState(false);
+  const [isTaskColorStateReady, setIsTaskColorStateReady] = useState(false);
+  const [taskColors, setTaskColors] = useState({});
   const [isNotionStatusLoading, setIsNotionStatusLoading] = useState(false);
   const lastFocusRefreshRef = useRef(null);
+  const handledNotionCodesRef = useRef(new Set());
+  const pendingNotionCodeRef = useRef(null);
 
   const monthDays = useMemo(() => buildMonthDays(viewMonth), [viewMonth]);
   const viewMonthKey = useMemo(() => getMonthKey(viewMonth), [viewMonth]);
@@ -216,6 +226,27 @@ export default function CalendarScreen() {
     persistentStorage.set(CALENDAR_VIEW_MONTH_KEY, viewMonthKey);
   }, [isCalendarStateReady, viewMonthKey]);
 
+  useEffect(() => {
+    let isMounted = true;
+    persistentStorage.get(CALENDAR_TASK_COLORS_KEY).then((savedColors) => {
+      if (!isMounted || !savedColors) return;
+      try {
+        const parsed = JSON.parse(savedColors);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) setTaskColors(parsed);
+      } catch {}
+    }).catch(() => {}).finally(() => {
+      if (isMounted) setIsTaskColorStateReady(true);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTaskColorStateReady) return;
+    persistentStorage.set(CALENDAR_TASK_COLORS_KEY, JSON.stringify(taskColors));
+  }, [isTaskColorStateReady, taskColors]);
+
   useFocusEffect(useCallback(() => {
     const refreshKey = `${workspace?.id || 'none'}:${notionAction || 'idle'}`;
     if (lastFocusRefreshRef.current === refreshKey || notionAction) return undefined;
@@ -257,10 +288,13 @@ export default function CalendarScreen() {
 
     const code = getNotionCode(url);
     if (!code) return false;
+    if (handledNotionCodesRef.current.has(code) || pendingNotionCodeRef.current === code) return true;
 
     try {
+      pendingNotionCodeRef.current = code;
       setNotionAction('link');
       await completeNotionCalendarLink(code);
+      handledNotionCodesRef.current.add(code);
       if (Platform.OS === 'web' && typeof window !== 'undefined' && String(window.location.href).includes('code=')) {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
@@ -270,6 +304,7 @@ export default function CalendarScreen() {
       Alert.alert('Notion 연결 실패', connectError?.message || 'Notion 계정을 연결하지 못했습니다.');
       return false;
     } finally {
+      pendingNotionCodeRef.current = null;
       setNotionAction(null);
     }
   }, [completeNotionCalendarLink]);
@@ -365,6 +400,15 @@ export default function CalendarScreen() {
     }, 500);
   });
 
+  const openNotionAuth = async () => {
+    const { authUrl } = await startNotionCalendarLink();
+    if (Platform.OS === 'web') {
+      await openNotionAuthOnWeb(authUrl);
+      return;
+    }
+    await Linking.openURL(authUrl);
+  };
+
   const handleConnectNotion = async () => {
     try {
       setNotionAction('connect');
@@ -374,17 +418,48 @@ export default function CalendarScreen() {
         Alert.alert('Notion 설정 완료', 'Notion 캘린더 설정과 동기화를 완료했습니다.');
         return;
       }
-      const { authUrl } = await startNotionCalendarLink();
-      if (Platform.OS === 'web') {
-        await openNotionAuthOnWeb(authUrl);
-        return;
-      }
-      await Linking.openURL(authUrl);
+      await openNotionAuth();
     } catch (error) {
       Alert.alert('Notion 연결 실패', error?.message || 'Notion 인증 화면을 열지 못했습니다.');
     } finally {
       setNotionAction(null);
     }
+  };
+
+  const handleReconnectNotion = async () => {
+    try {
+      setNotionAction('reconnect');
+      await openNotionAuth();
+    } catch (error) {
+      Alert.alert('Notion 재연결 실패', error?.message || 'Notion 인증 화면을 열지 못했습니다.');
+    } finally {
+      setNotionAction(null);
+    }
+  };
+
+  const handleDisconnectNotion = async () => {
+    Alert.alert(
+      'Notion 연동 취소',
+      '앱에서 Notion 연동 상태를 해제합니다. 다시 연결할 수 있습니다.',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '해제',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setNotionAction('disconnect');
+              await disconnectNotionCalendar?.();
+              Alert.alert('연동 취소 완료', 'Notion을 다시 연결할 수 있습니다.');
+            } catch (error) {
+              Alert.alert('연동 취소 실패', error?.message || 'Notion 연동 상태를 변경하지 못했습니다.');
+            } finally {
+              setNotionAction(null);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleExport = async () => {
@@ -396,8 +471,21 @@ export default function CalendarScreen() {
       }
 
       setNotionAction('sync');
-      await syncNotionCalendar();
-      Alert.alert('동기화 완료', 'Notion 캘린더와 동기화했습니다.');
+      const result = await syncNotionCalendar();
+      if (result?.noTaskBackedEvents) {
+        Alert.alert(
+          '동기화 불가',
+          result?.taskCount > 0
+            ? '백엔드에 할일 Notion 동기화 API가 없습니다. 할일과 연결된 일정도 없어 보낼 수 없습니다.'
+            : '보낼 할일이 없습니다.',
+        );
+      } else if (result?.alreadySynced || result?.syncedCount === 0) {
+        Alert.alert('동기화 완료', '새로 보낼 일정이 없습니다. 중복 생성을 막았습니다.');
+      } else {
+        const skippedText = result?.skippedCount ? `, ${result.skippedCount}개 건너뜀` : '';
+        const unmatchedText = result?.unmatchedTaskCount ? `, ${result.unmatchedTaskCount}개 매칭 실패` : '';
+        Alert.alert('동기화 완료', `${result?.syncedCount || 0}개 할일을 Notion 캘린더에 보냈습니다${skippedText}${unmatchedText}.`);
+      }
     } catch (error) {
       Alert.alert('동기화 실패', error?.message || 'Notion 캘린더 동기화에 실패했습니다.');
     } finally {
@@ -413,17 +501,33 @@ export default function CalendarScreen() {
     }
   };
 
+  const handleUpdateTaskColor = (taskId, toneId) => {
+    if (!SELECTABLE_TASK_TONES.some((tone) => tone.id === toneId)) return;
+    setTaskColors((prev) => ({ ...prev, [String(taskId)]: toneId }));
+  };
+
   const handleDeleteTask = async (taskId) => {
     try {
       await deleteCalendarTask(taskId);
+      setTaskColors((prev) => {
+        const next = { ...prev };
+        delete next[String(taskId)];
+        return next;
+      });
     } catch (error) {
       Alert.alert('삭제 실패', error?.message || '할일을 삭제하지 못했습니다.');
     }
   };
 
   const isNotionBusy = Boolean(notionAction) || isNotionStatusLoading;
-  const notionReady = notionConnected && notionStatus?.calendarConfigured;
+  const notionReady = notionConnected && notionStatus?.calendarConfigured && Boolean(String(notionStatus?.calendarName || '').trim());
   const notionButtonLabel = notionConnected ? (notionReady ? 'Notion 동기화' : 'Notion 설정 완료') : 'Notion 연결하기';
+  const notionTitle = notionConnected ? 'Notion 연결됨' : 'Notion 연결 대기';
+  const notionDescription = notionStatus?.localDisconnected
+    ? '앱에서 연동을 취소했습니다. 다시 연결할 수 있습니다.'
+    : notionConnected && notionStatus?.calendarConfigured && !notionReady
+      ? '기존 Notion 캘린더를 찾을 수 없어 다음 동기화 때 새로 설정합니다.'
+    : '계정을 승인하면 앱에서 Notion 연결 상태를 관리할 수 있습니다.';
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -482,8 +586,8 @@ export default function CalendarScreen() {
               <Ionicons name="calendar-clear-outline" size={22} color={COLORS.primary} />
             </View>
             <View style={styles.notionCopy}>
-              <Text style={styles.notionTitle}>{notionConnected ? 'Notion 연결됨' : 'Notion 연결 대기'}</Text>
-              <Text style={styles.notionDesc}>계정을 승인하면 앱에서 Notion 연결 상태를 관리할 수 있습니다.</Text>
+              <Text style={styles.notionTitle}>{notionTitle}</Text>
+              <Text style={styles.notionDesc}>{notionDescription}</Text>
             </View>
           </View>
           <TouchableOpacity
@@ -499,6 +603,28 @@ export default function CalendarScreen() {
             )}
             <Text style={styles.notionBtnText}>{isNotionBusy ? '처리 중' : notionButtonLabel}</Text>
           </TouchableOpacity>
+          {notionConnected ? (
+            <View style={styles.notionActionRow}>
+              <TouchableOpacity
+                style={[styles.notionSecondaryBtn, isNotionBusy && styles.disabledButton]}
+                onPress={handleReconnectNotion}
+                activeOpacity={0.82}
+                disabled={isNotionBusy}
+              >
+                <Ionicons name="refresh-outline" size={16} color={COLORS.primary} />
+                <Text style={styles.notionSecondaryText}>다시 연결</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.notionDangerBtn, isNotionBusy && styles.disabledButton]}
+                onPress={handleDisconnectNotion}
+                activeOpacity={0.82}
+                disabled={isNotionBusy}
+              >
+                <Ionicons name="unlink-outline" size={16} color={COLORS.error} />
+                <Text style={styles.notionDangerText}>연동 취소</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.monthCalendar}>
@@ -558,7 +684,7 @@ export default function CalendarScreen() {
                   </View>
                   <View style={styles.dayTaskList}>
                     {dayTasks.slice(0, 3).map((task, index) => {
-                      const tone = getTaskTone(task, index);
+                      const tone = getTaskTone(task, index, taskColors);
                       return (
                         <View
                           key={task.id}
@@ -606,7 +732,9 @@ export default function CalendarScreen() {
                     key={task.id}
                     task={task}
                     toneIndex={index}
+                    taskColors={taskColors}
                     onStatusChange={handleUpdateTaskStatus}
+                    onColorChange={handleUpdateTaskColor}
                     onDelete={handleDeleteTask}
                   />
                 ))}
@@ -652,7 +780,9 @@ export default function CalendarScreen() {
                     task={task}
                     toneIndex={index}
                     variant="modal"
+                    taskColors={taskColors}
                     onStatusChange={handleUpdateTaskStatus}
+                    onColorChange={handleUpdateTaskColor}
                     onDelete={handleDeleteTask}
                   />
                 ))}
@@ -665,9 +795,12 @@ export default function CalendarScreen() {
   );
 }
 
-function TaskDetailItem({ task, toneIndex = 0, variant = 'list', onStatusChange, onDelete }) {
-  const tone = getTaskTone(task, toneIndex);
+function TaskDetailItem({ task, toneIndex = 0, variant = 'list', taskColors = {}, onStatusChange, onColorChange, onDelete }) {
+  const tone = getTaskTone(task, toneIndex, taskColors);
   const dateKey = getTaskDateKey(task);
+  const isDone = task.statusCode === 'DONE';
+  const activeToneId = isDone ? DONE_TASK_TONE.id : tone.id;
+  const palette = isDone ? [DONE_TASK_TONE] : SELECTABLE_TASK_TONES;
 
   return (
     <View
@@ -691,15 +824,45 @@ function TaskDetailItem({ task, toneIndex = 0, variant = 'list', onStatusChange,
           {STATUS_OPTIONS.map((option) => (
             <TouchableOpacity
               key={option.code}
-              style={[styles.statusBtn, task.statusCode === option.code && styles.statusBtnActive]}
+              style={[
+                styles.statusBtn,
+                task.statusCode === option.code && styles.statusBtnActive,
+                task.statusCode === option.code && { backgroundColor: tone.background },
+              ]}
               onPress={() => onStatusChange(task.id, option.code)}
               activeOpacity={0.8}
             >
-              <Text style={[styles.statusBtnText, task.statusCode === option.code && styles.statusBtnTextActive]}>
+              <Text style={[
+                styles.statusBtnText,
+                task.statusCode === option.code && styles.statusBtnTextActive,
+                task.statusCode === option.code && { color: tone.text },
+              ]}>
                 {option.label}
               </Text>
             </TouchableOpacity>
           ))}
+        </View>
+        <View style={styles.colorRow}>
+          {palette.map((option) => {
+            const isActive = activeToneId === option.id;
+            return (
+              <TouchableOpacity
+                key={option.id}
+                style={[
+                  styles.colorSwatch,
+                  { backgroundColor: option.background, borderColor: isActive ? option.text : option.border },
+                  isActive && styles.colorSwatchActive,
+                ]}
+                onPress={() => onColorChange?.(task.id, option.id)}
+                activeOpacity={0.76}
+                disabled={isDone}
+                accessibilityRole="button"
+                accessibilityLabel={`task-color-${option.id}`}
+              >
+                {isActive ? <Ionicons name="checkmark" size={12} color={option.text} /> : null}
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
       <TouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(task.id)} activeOpacity={0.8}>
@@ -762,6 +925,11 @@ const styles = StyleSheet.create({
   notionBtn: { marginTop: 16, minHeight: 48, borderRadius: 8, backgroundColor: COLORS.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 12 },
   notionBtnConnected: { backgroundColor: COLORS.secondary },
   notionBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15, letterSpacing: 0 },
+  notionActionRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  notionSecondaryBtn: { flex: 1, minHeight: 42, borderRadius: 8, backgroundColor: '#EEF2FF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 10 },
+  notionDangerBtn: { flex: 1, minHeight: 42, borderRadius: 8, backgroundColor: '#FEF2F2', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 10 },
+  notionSecondaryText: { color: COLORS.primary, fontWeight: '800', fontSize: 13, letterSpacing: 0 },
+  notionDangerText: { color: COLORS.error, fontWeight: '800', fontSize: 13, letterSpacing: 0 },
   disabledButton: { opacity: 0.7 },
   monthCalendar: {
     backgroundColor: COLORS.surface,
@@ -829,6 +997,9 @@ const styles = StyleSheet.create({
   statusBtnActive: { backgroundColor: '#EEF2FF' },
   statusBtnText: { fontSize: 11, color: COLORS.subtext, fontWeight: '800', letterSpacing: 0 },
   statusBtnTextActive: { color: COLORS.primary },
+  colorRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 10 },
+  colorSwatch: { width: 24, height: 24, borderRadius: 6, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  colorSwatchActive: { borderWidth: 3 },
   deleteBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center' },
   emptyState: { backgroundColor: COLORS.surface, borderRadius: 8, paddingVertical: 26, paddingHorizontal: 18, alignItems: 'center', marginTop: 10 },
   emptyStateText: { color: COLORS.subtext, fontSize: 13, fontWeight: '700', marginTop: 8, textAlign: 'center', letterSpacing: 0 },
