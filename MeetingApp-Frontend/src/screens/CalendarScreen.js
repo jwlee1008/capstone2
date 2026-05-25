@@ -21,6 +21,7 @@ import { COLORS } from '../theme';
 
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
 const CALENDAR_VIEW_MONTH_KEY = 'calendarViewMonth';
+const CALENDAR_TASK_COLORS_KEY = 'calendarTaskColors';
 
 const STATUS_OPTIONS = [
   { code: 'TODO', label: '할일' },
@@ -29,13 +30,15 @@ const STATUS_OPTIONS = [
 ];
 
 const TASK_TONES = [
-  { background: '#EEF2FF', border: '#8B91F8', text: '#4F46E5' },
-  { background: '#FFF7E6', border: '#F5C451', text: '#946A22' },
-  { background: '#EAF5FF', border: '#7CC4F8', text: '#2A6F9E' },
-  { background: '#FDEAF2', border: '#E889A8', text: '#93465F' },
-  { background: '#F0F1F5', border: '#9CA3AF', text: '#4B5563' },
-  { background: '#ECFDF5', border: '#6EE7B7', text: '#047857' },
+  { id: 'indigo', background: '#EEF2FF', border: '#8B91F8', text: '#4F46E5' },
+  { id: 'amber', background: '#FFF7E6', border: '#F5C451', text: '#946A22' },
+  { id: 'sky', background: '#EAF5FF', border: '#7CC4F8', text: '#2A6F9E' },
+  { id: 'rose', background: '#FDEAF2', border: '#E889A8', text: '#93465F' },
+  { id: 'gray', background: '#F0F1F5', border: '#9CA3AF', text: '#4B5563' },
+  { id: 'green', background: '#ECFDF5', border: '#6EE7B7', text: '#047857' },
 ];
+const DONE_TASK_TONE = TASK_TONES.find((tone) => tone.id === 'gray');
+const SELECTABLE_TASK_TONES = TASK_TONES.filter((tone) => tone.id !== 'gray');
 
 function getUrlParam(url, key) {
   if (!url) return null;
@@ -133,13 +136,15 @@ function buildMonthDays(monthDate) {
   });
 }
 
-function getTaskTone(task, index = 0) {
-  if (task?.statusCode === 'DONE') return TASK_TONES[4];
+function getTaskTone(task, index = 0, taskColors = {}) {
+  if (task?.statusCode === 'DONE') return DONE_TASK_TONE;
+  const savedTone = SELECTABLE_TASK_TONES.find((tone) => tone.id === taskColors[String(task?.id)]);
+  if (savedTone) return savedTone;
   if (task?.statusCode === 'IN_PROGRESS') return TASK_TONES[2];
 
   const seed = String(task?.id || task?.title || index);
   const hash = seed.split('').reduce((sum, char) => sum + char.charCodeAt(0), index);
-  return TASK_TONES[Math.abs(hash) % TASK_TONES.length];
+  return SELECTABLE_TASK_TONES[Math.abs(hash) % SELECTABLE_TASK_TONES.length];
 }
 
 function getStatusLabel(statusCode) {
@@ -170,6 +175,8 @@ export default function CalendarScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [switchingWorkspaceId, setSwitchingWorkspaceId] = useState(null);
   const [isCalendarStateReady, setIsCalendarStateReady] = useState(false);
+  const [isTaskColorStateReady, setIsTaskColorStateReady] = useState(false);
+  const [taskColors, setTaskColors] = useState({});
   const [isNotionStatusLoading, setIsNotionStatusLoading] = useState(false);
   const lastFocusRefreshRef = useRef(null);
 
@@ -215,6 +222,27 @@ export default function CalendarScreen() {
     if (!isCalendarStateReady) return;
     persistentStorage.set(CALENDAR_VIEW_MONTH_KEY, viewMonthKey);
   }, [isCalendarStateReady, viewMonthKey]);
+
+  useEffect(() => {
+    let isMounted = true;
+    persistentStorage.get(CALENDAR_TASK_COLORS_KEY).then((savedColors) => {
+      if (!isMounted || !savedColors) return;
+      try {
+        const parsed = JSON.parse(savedColors);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) setTaskColors(parsed);
+      } catch {}
+    }).catch(() => {}).finally(() => {
+      if (isMounted) setIsTaskColorStateReady(true);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTaskColorStateReady) return;
+    persistentStorage.set(CALENDAR_TASK_COLORS_KEY, JSON.stringify(taskColors));
+  }, [isTaskColorStateReady, taskColors]);
 
   useFocusEffect(useCallback(() => {
     const refreshKey = `${workspace?.id || 'none'}:${notionAction || 'idle'}`;
@@ -413,9 +441,19 @@ export default function CalendarScreen() {
     }
   };
 
+  const handleUpdateTaskColor = (taskId, toneId) => {
+    if (!SELECTABLE_TASK_TONES.some((tone) => tone.id === toneId)) return;
+    setTaskColors((prev) => ({ ...prev, [String(taskId)]: toneId }));
+  };
+
   const handleDeleteTask = async (taskId) => {
     try {
       await deleteCalendarTask(taskId);
+      setTaskColors((prev) => {
+        const next = { ...prev };
+        delete next[String(taskId)];
+        return next;
+      });
     } catch (error) {
       Alert.alert('삭제 실패', error?.message || '할일을 삭제하지 못했습니다.');
     }
@@ -558,7 +596,7 @@ export default function CalendarScreen() {
                   </View>
                   <View style={styles.dayTaskList}>
                     {dayTasks.slice(0, 3).map((task, index) => {
-                      const tone = getTaskTone(task, index);
+                      const tone = getTaskTone(task, index, taskColors);
                       return (
                         <View
                           key={task.id}
@@ -606,7 +644,9 @@ export default function CalendarScreen() {
                     key={task.id}
                     task={task}
                     toneIndex={index}
+                    taskColors={taskColors}
                     onStatusChange={handleUpdateTaskStatus}
+                    onColorChange={handleUpdateTaskColor}
                     onDelete={handleDeleteTask}
                   />
                 ))}
@@ -652,7 +692,9 @@ export default function CalendarScreen() {
                     task={task}
                     toneIndex={index}
                     variant="modal"
+                    taskColors={taskColors}
                     onStatusChange={handleUpdateTaskStatus}
+                    onColorChange={handleUpdateTaskColor}
                     onDelete={handleDeleteTask}
                   />
                 ))}
@@ -665,9 +707,12 @@ export default function CalendarScreen() {
   );
 }
 
-function TaskDetailItem({ task, toneIndex = 0, variant = 'list', onStatusChange, onDelete }) {
-  const tone = getTaskTone(task, toneIndex);
+function TaskDetailItem({ task, toneIndex = 0, variant = 'list', taskColors = {}, onStatusChange, onColorChange, onDelete }) {
+  const tone = getTaskTone(task, toneIndex, taskColors);
   const dateKey = getTaskDateKey(task);
+  const isDone = task.statusCode === 'DONE';
+  const activeToneId = isDone ? DONE_TASK_TONE.id : tone.id;
+  const palette = isDone ? [DONE_TASK_TONE] : SELECTABLE_TASK_TONES;
 
   return (
     <View
@@ -691,15 +736,45 @@ function TaskDetailItem({ task, toneIndex = 0, variant = 'list', onStatusChange,
           {STATUS_OPTIONS.map((option) => (
             <TouchableOpacity
               key={option.code}
-              style={[styles.statusBtn, task.statusCode === option.code && styles.statusBtnActive]}
+              style={[
+                styles.statusBtn,
+                task.statusCode === option.code && styles.statusBtnActive,
+                task.statusCode === option.code && { backgroundColor: tone.background },
+              ]}
               onPress={() => onStatusChange(task.id, option.code)}
               activeOpacity={0.8}
             >
-              <Text style={[styles.statusBtnText, task.statusCode === option.code && styles.statusBtnTextActive]}>
+              <Text style={[
+                styles.statusBtnText,
+                task.statusCode === option.code && styles.statusBtnTextActive,
+                task.statusCode === option.code && { color: tone.text },
+              ]}>
                 {option.label}
               </Text>
             </TouchableOpacity>
           ))}
+        </View>
+        <View style={styles.colorRow}>
+          {palette.map((option) => {
+            const isActive = activeToneId === option.id;
+            return (
+              <TouchableOpacity
+                key={option.id}
+                style={[
+                  styles.colorSwatch,
+                  { backgroundColor: option.background, borderColor: isActive ? option.text : option.border },
+                  isActive && styles.colorSwatchActive,
+                ]}
+                onPress={() => onColorChange?.(task.id, option.id)}
+                activeOpacity={0.76}
+                disabled={isDone}
+                accessibilityRole="button"
+                accessibilityLabel={`task-color-${option.id}`}
+              >
+                {isActive ? <Ionicons name="checkmark" size={12} color={option.text} /> : null}
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
       <TouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(task.id)} activeOpacity={0.8}>
@@ -829,6 +904,9 @@ const styles = StyleSheet.create({
   statusBtnActive: { backgroundColor: '#EEF2FF' },
   statusBtnText: { fontSize: 11, color: COLORS.subtext, fontWeight: '800', letterSpacing: 0 },
   statusBtnTextActive: { color: COLORS.primary },
+  colorRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 10 },
+  colorSwatch: { width: 24, height: 24, borderRadius: 6, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  colorSwatchActive: { borderWidth: 3 },
   deleteBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center' },
   emptyState: { backgroundColor: COLORS.surface, borderRadius: 8, paddingVertical: 26, paddingHorizontal: 18, alignItems: 'center', marginTop: 10 },
   emptyStateText: { color: COLORS.subtext, fontSize: 13, fontWeight: '700', marginTop: 8, textAlign: 'center', letterSpacing: 0 },

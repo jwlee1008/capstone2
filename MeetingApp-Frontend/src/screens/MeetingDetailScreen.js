@@ -8,6 +8,20 @@ import { useAppContext } from '../context/AppContext';
 import { COLORS } from '../theme';
 
 const formatDateTime = (iso) => { const d = new Date(iso); return isNaN(d.getTime()) ? '-' : `${d.getMonth() + 1}월 ${d.getDate()}일 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+const isValidDateInput = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false;
+  const [year, month, day] = text.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+};
+const normalizeManualTask = (task) => ({
+  ...task,
+  title: task.title.trim(),
+  assignee: task.assignee.trim(),
+  dueDate: task.dueDate.trim(),
+});
 
 export default function MeetingDetailScreen({ navigation, route }) {
   const { meetingId } = route.params;
@@ -58,6 +72,13 @@ export default function MeetingDetailScreen({ navigation, route }) {
       Alert.alert('등록 실패', error?.message || '할일을 등록하지 못했습니다.');
     }
   };
+  const handleManualTaskSubmit = async () => {
+    const nextTask = normalizeManualTask(manualTask);
+    if (!nextTask.title) return Alert.alert('입력 오류', '업무 내용을 입력해주세요.');
+    if (!isValidDateInput(nextTask.dueDate)) return Alert.alert('입력 오류', '마감일은 YYYY-MM-DD 형식으로 입력해주세요.');
+    await registerTask(nextTask);
+    setManualTask({ title: '', assignee: '', dueDate: '' });
+  };
   const handleInvite = async () => {
     if (!inviteEmail.trim()) return Alert.alert('입력 오류', '회원가입 ID로 사용한 이메일을 입력해주세요.');
     try {
@@ -75,7 +96,7 @@ export default function MeetingDetailScreen({ navigation, route }) {
   return (
     <SafeAreaView style={styles.safeArea} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        <View style={styles.infoCard}><View style={styles.infoCardTop}><View style={styles.meetingAvatarWrap}><Text style={styles.meetingAvatarText}>{meeting.name.charAt(0)}</Text></View><View style={styles.infoCardText}><Text style={styles.meetingNameLarge}>{meeting.name}</Text><Text style={styles.meetingCreateDate}>{formatDateTime(meeting.createdAt)}</Text></View></View>{meeting.description ? <View style={styles.descriptionBox}><Text style={styles.descriptionText}>{meeting.description}</Text></View> : null}<View style={styles.statsRow}><InfoStat value={meeting.participants.length} label="참여자" /><View style={styles.statDivider} /><InfoStat value={meeting.sessions.length} label="녹음 파일" /><View style={styles.statDivider} /><InfoStat value={latestSession?.tasks?.length || 0} label="제안 할일" /></View></View>
+        <View style={styles.infoCard}><View style={styles.infoCardTop}><View style={styles.meetingAvatarWrap}><Text style={styles.meetingAvatarText}>{meeting.name.charAt(0)}</Text></View><View style={styles.infoCardText}><Text style={styles.meetingNameLarge}>{meeting.name}</Text><Text style={styles.meetingCreateDate}>{formatDateTime(meeting.createdAt)}</Text></View></View>{meeting.description ? <View style={styles.descriptionBox}><Text style={styles.descriptionText}>{meeting.description}</Text></View> : null}<View style={styles.statsRow}><InfoStat value={meeting.participants.length} label="멤버" /><View style={styles.statDivider} /><InfoStat value={meeting.sessions.length} label="녹음 파일" /><View style={styles.statDivider} /><InfoStat value={latestSession?.tasks?.length || 0} label="제안 할일" /></View></View>
         <View style={styles.inviteCard}><View style={styles.analysisCardHeader}><Ionicons name="person-add-outline" size={17} color={COLORS.primary} /><Text style={styles.analysisCardTitle}>워크스페이스 초대</Text></View><Text style={styles.cardDesc}>회원가입 ID로 사용한 이메일을 입력하면 워크스페이스 초대가 전송됩니다.</Text><View style={styles.inviteRow}><TextInput style={[styles.manualInput, styles.inviteInput]} placeholder="teammate@example.com" value={inviteEmail} onChangeText={setInviteEmail} autoCapitalize="none" keyboardType="email-address" /><TouchableOpacity style={[styles.inviteBtn, isInviting && styles.inviteBtnDisabled]} onPress={handleInvite} disabled={isInviting}>{isInviting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="send" size={18} color="#FFFFFF" />}</TouchableOpacity></View>{workspace?.invitedEmails?.map((email) => <Text key={email} style={styles.invitedText}>초대 대기: {email}</Text>)}</View>
         <View style={styles.controlArea}><TouchableOpacity style={styles.uploadBtn} onPress={handlePickFile} activeOpacity={0.85} disabled={isUploading}><View style={styles.uploadBtnLeft}><View style={styles.uploadIconWrap}>{isUploading ? <ActivityIndicator size="small" color={COLORS.primary} /> : <Ionicons name="folder-open-outline" size={22} color={COLORS.primary} />}</View><View style={{ flex: 1 }}><Text style={styles.uploadBtnTitle}>{isUploading ? '업로드 및 STT 진행중' : '녹음 파일 업로드'}</Text><Text style={styles.uploadBtnDesc}>서버에 녹음 파일을 저장하고 STT를 시작합니다</Text></View></View><Ionicons name="chevron-forward" size={18} color={COLORS.border} /></TouchableOpacity></View>
         {latestSession ? <View style={styles.analysisSection}>
@@ -85,7 +106,7 @@ export default function MeetingDetailScreen({ navigation, route }) {
           <Card><View style={styles.analysisCardHeader}><Ionicons name="chatbubbles-outline" size={16} color={COLORS.primary} /><Text style={styles.analysisCardTitle}>화자 이름이 적용된 전체 대화록</Text></View>{latestSession.transcript.map((seg) => <View key={seg.id} style={styles.segmentRow}><SpeakerBadge text={latestSession.speakerMap[seg.speakerKey] || `화자${seg.speakerKey}`} /><View style={{ flex: 1 }}><Text style={styles.segmentTime}>{seg.time}</Text><Text style={styles.segmentContent}>{seg.text}</Text></View></View>)}</Card>
           <Card><View style={styles.analysisCardHeader}><Ionicons name="checkmark-circle-outline" size={16} color={COLORS.success} /><Text style={styles.analysisCardTitle}>제안된 할일 검토</Text></View>{latestSession.tasks.map((task) => <View key={task.id} style={styles.taskItem}><View style={styles.taskDot} /><View style={{ flex: 1 }}><Text style={styles.taskTitle}>{task.title}</Text><Text style={styles.taskDue}>담당자: {task.assignee} · 마감: {task.dueDate}</Text></View><TouchableOpacity style={styles.calendarAddBtn} onPress={() => registerTask(task)}><Ionicons name="calendar-outline" size={14} color={COLORS.primary} /><Text style={styles.calendarAddText}>등록</Text></TouchableOpacity></View>)}</Card>
           <Card><View style={styles.analysisCardHeader}><Ionicons name="time-outline" size={16} color={COLORS.primary} /><Text style={styles.analysisCardTitle}>AI 추출 일정</Text></View>{latestSession.events?.length ? latestSession.events.map((event) => <View key={event.id} style={styles.taskItem}><View style={styles.taskDot} /><View style={{ flex: 1 }}><Text style={styles.taskTitle}>{event.title}</Text><Text style={styles.taskDue}>{event.startAt}</Text></View></View>) : <Text style={styles.cardDesc}>분석된 일정이 없어요.</Text>}</Card>
-          <Card><View style={styles.analysisCardHeader}><Ionicons name="create-outline" size={16} color={COLORS.primary} /><Text style={styles.analysisCardTitle}>수동 할일 등록</Text></View><TextInput style={styles.manualInput} placeholder="업무 내용" value={manualTask.title} onChangeText={(title) => setManualTask((p) => ({ ...p, title }))} /><TextInput style={styles.manualInput} placeholder="담당자" value={manualTask.assignee} onChangeText={(assignee) => setManualTask((p) => ({ ...p, assignee }))} /><TextInput style={styles.manualInput} placeholder="마감일 예: 2026-05-20" value={manualTask.dueDate} onChangeText={(dueDate) => setManualTask((p) => ({ ...p, dueDate }))} /><TouchableOpacity style={styles.manualAddBtn} onPress={async () => { if (!manualTask.title.trim()) return Alert.alert('입력 오류', '업무 내용을 입력해주세요.'); await registerTask(manualTask); setManualTask({ title: '', assignee: '', dueDate: '' }); }}><Text style={styles.manualAddBtnText}>수동 등록</Text></TouchableOpacity></Card>
+          <Card><View style={styles.analysisCardHeader}><Ionicons name="create-outline" size={16} color={COLORS.primary} /><Text style={styles.analysisCardTitle}>수동 할일 등록</Text></View><TextInput style={styles.manualInput} placeholder="업무 내용" value={manualTask.title} onChangeText={(title) => setManualTask((p) => ({ ...p, title }))} /><TextInput style={styles.manualInput} placeholder="담당자" value={manualTask.assignee} onChangeText={(assignee) => setManualTask((p) => ({ ...p, assignee }))} /><TextInput style={styles.manualInput} placeholder="마감일 예: 2026-05-20" value={manualTask.dueDate} onChangeText={(dueDate) => setManualTask((p) => ({ ...p, dueDate }))} /><TouchableOpacity style={styles.manualAddBtn} onPress={handleManualTaskSubmit}><Text style={styles.manualAddBtnText}>수동 등록</Text></TouchableOpacity></Card>
         </View> : <View style={styles.emptyAnalysisCard}><Ionicons name="cloud-upload-outline" size={40} color={COLORS.border} /><Text style={styles.emptyAnalysisTitle}>녹음 파일을 업로드해주세요</Text><Text style={styles.emptyAnalysisDesc}>회의마다 녹음 파일을 누적 업로드하고 캘린더 할일을 계속 갱신할 수 있습니다.</Text></View>}
       </ScrollView>
       <SpeakerModal visible={Boolean(selectedSpeaker)} speakerKey={selectedSpeaker} members={workspace?.members || []} onClose={() => setSelectedSpeaker(null)} onSave={async (name) => { await updateSpeakerName(meeting.id, latestSession.id, selectedSpeaker, name); setSelectedSpeaker(null); }} />

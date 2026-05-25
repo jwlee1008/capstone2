@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 const DEFAULT_BASE_URL = 'http://localhost:8080';
 const REQUEST_TIMEOUT_MS = 12000;
 const UPLOAD_TIMEOUT_MS = 120000;
+const ANALYZE_TIMEOUT_MS = 120000;
 const TRANSCRIBE_TIMEOUT_MS = 12 * 60 * 1000;
 
 let accessToken = null;
@@ -126,9 +127,9 @@ async function request(path, options = {}, retry = true) {
   } catch (error) {
     console.error('[api] network error', options.method || 'GET', `${API_BASE_URL}${path}`, error);
     if (error?.name === 'AbortError') {
-      throw new Error(`백엔드 응답이 없습니다. IntelliJ에서 서버가 켜져 있는지 확인해주세요. (${API_BASE_URL})`);
+      throw new Error(`백엔드 응답이 없습니다. IntelliJ에서 서버가 켜져 있는지 확인해주세요. (${API_BASE_URL || 'same-origin'})`);
     }
-    throw new Error(`백엔드에 연결할 수 없습니다. IntelliJ 서버와 API 주소를 확인해주세요. (${API_BASE_URL})`);
+    throw new Error(`백엔드에 연결할 수 없습니다. IntelliJ 서버와 API 주소를 확인해주세요. (${API_BASE_URL || 'same-origin'})`);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -361,6 +362,7 @@ export const api = {
   analyzeTranscript(transcriptId) {
     return request(`/api/meetings/transcripts/${transcriptId}/gemini-analyze`, {
       method: 'POST',
+      timeoutMs: ANALYZE_TIMEOUT_MS,
     });
   },
 
