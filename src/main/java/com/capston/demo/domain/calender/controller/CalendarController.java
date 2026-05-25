@@ -4,7 +4,9 @@ package com.capston.demo.domain.calender.controller;
 import com.capston.demo.domain.calender.controllerDocs.CalendarControllerDocs;
 import com.capston.demo.domain.calender.dto.request.NotionSyncRequestDto;
 import com.capston.demo.domain.calender.entity.Event;
+import com.capston.demo.domain.calender.entity.Task;
 import com.capston.demo.domain.calender.repository.EventRepository;
+import com.capston.demo.domain.calender.repository.TaskRepository;
 import com.capston.demo.domain.calender.service.NotionCalendarService;
 import com.capston.demo.domain.user.entity.User;
 import com.capston.demo.domain.user.repository.UserNotionAccountRepository;
@@ -17,8 +19,11 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/calendar")
@@ -28,6 +33,7 @@ public class CalendarController implements CalendarControllerDocs {
 
     // 이벤트를 조회/저장하는 JPA 리포지토리
     private final EventRepository eventRepository;
+    private final TaskRepository taskRepository;
     // Event → Notion 페이지 생성 로직을 담당하는 서비스
     private final NotionCalendarService notionCalendarService;
     // 유저별로 연동된 Notion 계정 정보를 조회하는 리포지토리
@@ -226,6 +232,138 @@ public class CalendarController implements CalendarControllerDocs {
 
     // User 리포지토리를 직접 사용하지 않고도, userId 만으로
     // User 프록시(참조용 객체)를 만들어 JPA 연관관계 조회에 활용하기 위한 헬퍼 메서드
+    @PostMapping("/tasks/notion-sync-batch")
+    public ResponseEntity<?> syncTasksToNotionBatch(
+            @RequestBody NotionSyncRequestDto request
+    ) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !(authentication.getPrincipal() instanceof CustomUserDetails)) {
+            return ResponseEntity.status(401).body("Authentication required");
+        }
+
+        CustomUserDetails userDetails = (CustomUserDetails) authentication.getPrincipal();
+        Long userId = userDetails.getUserId();
+
+        return userNotionAccountRepository.findByUser(buildUserRef(userId))
+                .map(link -> {
+                    if (link.getCalendarDatabaseId() == null || link.getCalendarDatabaseId().isBlank()) {
+                        return ResponseEntity.badRequest().body(Map.of("error", "Notion calendar database is not configured"));
+                    }
+
+                    List<Long> taskIds = request.getTaskIds();
+                    if (taskIds == null || taskIds.isEmpty()) {
+                        return ResponseEntity.badRequest().body(Map.of("error", "taskIds must not be empty"));
+                    }
+
+                    String accessToken = link.getAccessToken();
+                    String databaseId = link.getCalendarDatabaseId();
+                    List<Map<String, Object>> results = taskIds.stream()
+                            .map(id -> syncOneTaskToNotion(id, userId, accessToken, databaseId))
+                            .toList();
+                    long syncedCount = results.stream()
+                            .filter(result -> "SUCCESS".equals(result.get("status")))
+                            .count();
+
+                    return ResponseEntity.ok(Map.of(
+                            "requestedCount", taskIds.size(),
+                            "syncedCount", syncedCount,
+                            "results", results
+                    ));
+                })
+                .orElseGet(() -> ResponseEntity.status(403).body(Map.of("error", "Notion account is not linked for this user")));
+    }
+
+    @DeleteMapping("/tasks/{taskId}/notion-sync")
+    public ResponseEntity<?> archiveTaskFromNotion(
+            @PathVariable Long taskId
+    ) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !(authentication.getPrincipal() instanceof CustomUserDetails)) {
+            return ResponseEntity.status(401).body("Authentication required");
+        }
+
+        CustomUserDetails userDetails = (CustomUserDetails) authentication.getPrincipal();
+        Long userId = userDetails.getUserId();
+
+        Optional<Task> taskOptional = taskRepository.findById(taskId);
+        if (taskOptional.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Task task = taskOptional.get();
+        if (!canAccessTask(task, userId)) {
+            return ResponseEntity.status(403).body(Map.of("error", "User is not a member of the workspace for this task"));
+        }
+
+        return userNotionAccountRepository.findByUser(buildUserRef(userId))
+                .map(link -> {
+                    if (link.getCalendarDatabaseId() == null || link.getCalendarDatabaseId().isBlank()) {
+                        return ResponseEntity.badRequest().body(Map.of("error", "Notion calendar database is not configured"));
+                    }
+
+                    Optional<String> archivedPageId = notionCalendarService.archiveTaskInNotion(
+                            task,
+                            link.getAccessToken(),
+                            link.getCalendarDatabaseId()
+                    );
+                    task.setNotionPageId(null);
+                    task.setNotionSyncedAt(null);
+                    taskRepository.save(task);
+
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("taskId", taskId);
+                    result.put("status", archivedPageId.isPresent() ? "ARCHIVED" : "NOT_SYNCED");
+                    archivedPageId.ifPresent(pageId -> result.put("notionPageId", pageId));
+                    return ResponseEntity.ok(result);
+                })
+                .orElseGet(() -> ResponseEntity.status(403).body(Map.of("error", "Notion account is not linked for this user")));
+    }
+
+    private Map<String, Object> syncOneTaskToNotion(Long taskId, Long userId, String accessToken, String databaseId) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("taskId", taskId);
+
+        Optional<Task> taskOptional = taskRepository.findById(taskId);
+        if (taskOptional.isEmpty()) {
+            result.put("status", "NOT_FOUND");
+            return result;
+        }
+
+        Task task = taskOptional.get();
+        if (!canAccessTask(task, userId)) {
+            result.put("status", "FORBIDDEN_WORKSPACE");
+            return result;
+        }
+
+        if (task.getDueDate() == null) {
+            result.put("status", "SKIPPED_NO_DUE_DATE");
+            return result;
+        }
+
+        try {
+            String notionPageId = notionCalendarService.syncTaskInNotion(task, accessToken, databaseId);
+            task.setNotionPageId(notionPageId);
+            task.setNotionSyncedAt(LocalDateTime.now());
+            taskRepository.save(task);
+            result.put("status", "SUCCESS");
+            result.put("notionPageId", notionPageId);
+            return result;
+        } catch (Exception e) {
+            log.warn("Failed to sync task to Notion. taskId={}, error={}", taskId, e.getMessage());
+            result.put("status", "FAILED");
+            result.put("message", e.getMessage());
+            return result;
+        }
+    }
+
+    private boolean canAccessTask(Task task, Long userId) {
+        Long workspaceId = task.getWorkspaceId();
+        if (workspaceId != null) {
+            return workspaceMemberRepository.existsByWorkspace_IdAndUser_Id(workspaceId, userId);
+        }
+        return task.getCreatedBy() != null && task.getCreatedBy().equals(userId);
+    }
+
     private User buildUserRef(Long userId) {
         User u = new User();
         u.setId(userId);

@@ -21,6 +21,8 @@ public class TaskResponse {
     private final TaskStatus status;
     private final TaskSource source;
     private final LocalDateTime createdAt;
+    private final String notionPageId;
+    private final LocalDateTime notionSyncedAt;
 
     public TaskResponse(Task task) {
         this.id = task.getId();
@@ -35,5 +37,7 @@ public class TaskResponse {
         this.status = task.getStatus();
         this.source = task.getSource();
         this.createdAt = task.getCreatedAt();
+        this.notionPageId = task.getNotionPageId();
+        this.notionSyncedAt = task.getNotionSyncedAt();
     }
 }

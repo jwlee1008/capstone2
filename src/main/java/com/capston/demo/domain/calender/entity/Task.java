@@ -42,5 +42,10 @@ public class Task {
     private Long meetingId;
 
     private LocalDateTime createdAt = LocalDateTime.now();
+
+    @Column(name = "notion_page_id", length = 100)
+    private String notionPageId;
+
+    private LocalDateTime notionSyncedAt;
 }
 

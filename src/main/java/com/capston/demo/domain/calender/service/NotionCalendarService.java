@@ -1,6 +1,7 @@
 package com.capston.demo.domain.calender.service;
 
 import com.capston.demo.domain.calender.entity.Event;
+import com.capston.demo.domain.calender.entity.Task;
 import com.capston.demo.domain.user.dto.response.NotionCalendarTargetResponse;
 import com.capston.demo.global.exception.BusinessException;
 import com.capston.demo.global.exception.ErrorCode;
@@ -19,6 +20,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 // Event 정보를 기반으로 Notion 캘린더(데이터베이스)에 페이지를 생성하는 서비스
 @Service
@@ -563,6 +565,223 @@ public class NotionCalendarService {
 
     private String asString(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    public String syncTaskInNotion(Task task, String accessToken, String databaseId) {
+        if (task == null || task.getDueDate() == null) {
+            throw new BusinessException(ErrorCode.NOTION_EVENT_CREATE_FAILED);
+        }
+
+        try {
+            ensureCalendarView(accessToken, databaseId, true);
+
+            String pageId = task.getNotionPageId();
+            if (pageId == null || pageId.isBlank()) {
+                pageId = findExistingTaskPageId(task, accessToken, databaseId).orElse(null);
+            }
+
+            if (pageId != null && !pageId.isBlank()) {
+                try {
+                    return updateTaskPage(task, accessToken, pageId);
+                } catch (HttpClientErrorException e) {
+                    if (e.getStatusCode() != HttpStatus.NOT_FOUND) {
+                        throw e;
+                    }
+                    log.warn("Notion task page not found. taskId={}, pageId={}", task.getId(), pageId);
+                }
+            }
+
+            return createTaskPage(task, accessToken, databaseId);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (HttpClientErrorException e) {
+            log.error("Notion API error while syncing task: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString(), e);
+            throw new BusinessException(ErrorCode.NOTION_EVENT_CREATE_FAILED, e);
+        } catch (Exception e) {
+            log.error("Error while syncing Notion task: {}", e.getMessage(), e);
+            throw new BusinessException(ErrorCode.NOTION_EVENT_CREATE_FAILED, e);
+        }
+    }
+
+    public Optional<String> archiveTaskInNotion(Task task, String accessToken, String databaseId) {
+        if (task == null) {
+            return Optional.empty();
+        }
+
+        try {
+            String pageId = task.getNotionPageId();
+            if (pageId == null || pageId.isBlank()) {
+                pageId = findExistingTaskPageId(task, accessToken, databaseId).orElse(null);
+            }
+            if (pageId == null || pageId.isBlank()) {
+                return Optional.empty();
+            }
+
+            archivePageInNotion(pageId, accessToken);
+            return Optional.of(pageId);
+        } catch (HttpClientErrorException e) {
+            if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
+                log.warn("Notion task page already missing. taskId={}, pageId={}", task.getId(), task.getNotionPageId());
+                return Optional.empty();
+            }
+            log.error("Notion API error while archiving task: status={}, body={}", e.getStatusCode(), e.getResponseBodyAsString(), e);
+            throw new BusinessException(ErrorCode.NOTION_EVENT_CREATE_FAILED, e);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Error while archiving Notion task: {}", e.getMessage(), e);
+            throw new BusinessException(ErrorCode.NOTION_EVENT_CREATE_FAILED, e);
+        }
+    }
+
+    private String createTaskPage(Task task, String accessToken, String databaseId) {
+        HttpEntity<Map<String, Object>> requestEntity = new HttpEntity<>(
+                buildTaskNotionPageRequest(task, databaseId),
+                notionHeaders(accessToken)
+        );
+        ResponseEntity<Map> response = restTemplate.exchange(
+                NOTION_PAGES_URL,
+                HttpMethod.POST,
+                requestEntity,
+                Map.class
+        );
+
+        if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+            String id = asString(response.getBody().get("id"));
+            if (id != null && !id.isBlank()) {
+                return id;
+            }
+        }
+
+        log.warn("Failed to create Notion task. status={}, body={}", response.getStatusCode(), response.getBody());
+        throw new BusinessException(ErrorCode.NOTION_EVENT_CREATE_FAILED);
+    }
+
+    private String updateTaskPage(Task task, String accessToken, String pageId) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("properties", buildTaskProperties(task));
+
+        ResponseEntity<Map> response = restTemplate.exchange(
+                NOTION_PAGES_URL + "/" + pageId,
+                HttpMethod.PATCH,
+                new HttpEntity<>(body, notionHeaders(accessToken)),
+                Map.class
+        );
+
+        if (response.getStatusCode().is2xxSuccessful()) {
+            String responsePageId = response.getBody() == null ? null : asString(response.getBody().get("id"));
+            return responsePageId == null || responsePageId.isBlank() ? pageId : responsePageId;
+        }
+
+        log.warn("Failed to update Notion task. status={}, body={}", response.getStatusCode(), response.getBody());
+        throw new BusinessException(ErrorCode.NOTION_EVENT_CREATE_FAILED);
+    }
+
+    private void archivePageInNotion(String pageId, String accessToken) {
+        Map<String, Object> body = Map.of("archived", true);
+        ResponseEntity<Map> response = restTemplate.exchange(
+                NOTION_PAGES_URL + "/" + pageId,
+                HttpMethod.PATCH,
+                new HttpEntity<>(body, notionHeaders(accessToken)),
+                Map.class
+        );
+
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            log.warn("Failed to archive Notion page. status={}, body={}", response.getStatusCode(), response.getBody());
+            throw new BusinessException(ErrorCode.NOTION_EVENT_CREATE_FAILED);
+        }
+    }
+
+    private Map<String, Object> buildTaskNotionPageRequest(Task task, String databaseId) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("parent", Map.of("database_id", databaseId));
+        body.put("properties", buildTaskProperties(task));
+        return body;
+    }
+
+    private Map<String, Object> buildTaskProperties(Task task) {
+        Map<String, Object> properties = new HashMap<>();
+        Map<String, Object> titleText = Map.of(
+                "type", "text",
+                "text", Map.of("content", task.getTitle())
+        );
+        properties.put(CALENDAR_TITLE_PROPERTY, Map.of("title", List.of(titleText)));
+
+        Map<String, Object> date = new HashMap<>();
+        date.put("start", task.getDueDate().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        properties.put(CALENDAR_DATE_PROPERTY, Map.of("date", date));
+        return properties;
+    }
+
+    private Optional<String> findExistingTaskPageId(Task task, String accessToken, String databaseId) {
+        if (task.getTitle() == null || task.getTitle().isBlank() || task.getDueDate() == null) {
+            return Optional.empty();
+        }
+
+        try {
+            Map<String, Object> body = new HashMap<>();
+            body.put("page_size", 20);
+            body.put("filter", Map.of(
+                    "property", CALENDAR_TITLE_PROPERTY,
+                    "title", Map.of("equals", task.getTitle())
+            ));
+
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    NOTION_DATABASES_URL + databaseId + "/query",
+                    HttpMethod.POST,
+                    new HttpEntity<>(body, notionHeaders(accessToken)),
+                    Map.class
+            );
+
+            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+                return Optional.empty();
+            }
+
+            Object resultsObj = response.getBody().get("results");
+            if (!(resultsObj instanceof List<?> results)) {
+                return Optional.empty();
+            }
+
+            String taskDate = task.getDueDate().toLocalDate().toString();
+            for (Object item : results) {
+                if (!(item instanceof Map<?, ?> raw)) {
+                    continue;
+                }
+                if (Boolean.TRUE.equals(raw.get("archived"))) {
+                    continue;
+                }
+                if (!taskDate.equals(extractPageDateKey(raw))) {
+                    continue;
+                }
+                String id = asString(raw.get("id"));
+                if (id != null && !id.isBlank()) {
+                    return Optional.of(id);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to find existing Notion task page. taskId={}, error={}", task.getId(), e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    private String extractPageDateKey(Map<?, ?> page) {
+        Object propertiesObj = page.get("properties");
+        if (!(propertiesObj instanceof Map<?, ?> properties)) {
+            return null;
+        }
+        Object datePropertyObj = properties.get(CALENDAR_DATE_PROPERTY);
+        if (!(datePropertyObj instanceof Map<?, ?> dateProperty)) {
+            return null;
+        }
+        Object dateObj = dateProperty.get("date");
+        if (!(dateObj instanceof Map<?, ?> date)) {
+            return null;
+        }
+        String start = asString(date.get("start"));
+        if (start == null || start.length() < 10) {
+            return null;
+        }
+        return start.substring(0, 10);
     }
 
     /**
