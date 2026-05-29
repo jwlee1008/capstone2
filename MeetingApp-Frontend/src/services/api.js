@@ -542,9 +542,20 @@ export const api = {
     });
   },
 
+  getNotionCalendarTargets() {
+    return request('/api/oauth2/notion/calendar-targets');
+  },
+
   createNotionCalendarTarget(payload = {}) {
     return request('/api/oauth2/notion/calendar-targets', {
       method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  setNotionCalendarDatabase(payload = {}) {
+    return request('/api/oauth2/notion/calendar-database', {
+      method: 'PUT',
       body: JSON.stringify(payload),
     });
   },

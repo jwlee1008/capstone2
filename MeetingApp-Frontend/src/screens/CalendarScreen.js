@@ -217,6 +217,10 @@ function getNotionSyncMessage(result) {
   return 'Notion 캘린더와 동기화했습니다.';
 }
 
+function getNotionTargetKey(target) {
+  return String(target?.id || target?.url || target?.name || '');
+}
+
 export default function CalendarScreen() {
   const {
     calendarTasks,
@@ -229,6 +233,9 @@ export default function CalendarScreen() {
     refreshWorkspaceData,
     startNotionCalendarLink,
     completeNotionCalendarLink,
+    loadNotionCalendarTargets,
+    configureNotionCalendarTarget,
+    createNotionCalendarTarget,
     refreshNotionStatus,
     syncNotionCalendar,
     syncWorkspaceNotionCalendar,
@@ -251,6 +258,11 @@ export default function CalendarScreen() {
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [eventForm, setEventForm] = useState(() => buildEventForm());
   const [isEventSaving, setIsEventSaving] = useState(false);
+  const [isNotionTargetModalOpen, setIsNotionTargetModalOpen] = useState(false);
+  const [notionCalendarTargets, setNotionCalendarTargets] = useState([]);
+  const [selectedNotionTargetKey, setSelectedNotionTargetKey] = useState('');
+  const [isNotionTargetLoading, setIsNotionTargetLoading] = useState(false);
+  const [isNotionTargetSaving, setIsNotionTargetSaving] = useState(false);
   const lastFocusRefreshRef = useRef(null);
   const notionOAuthClientRef = useRef(getOAuthClientType());
   const notionLinkModeRef = useRef('connect');
@@ -422,6 +434,57 @@ export default function CalendarScreen() {
     }
   };
 
+  const openNotionTargetModal = useCallback(async () => {
+    try {
+      setIsNotionTargetModalOpen(true);
+      setIsNotionTargetLoading(true);
+      const targets = await loadNotionCalendarTargets();
+      setNotionCalendarTargets(targets);
+      setSelectedNotionTargetKey((current) => (
+        targets.some((target) => getNotionTargetKey(target) === current) ? current : getNotionTargetKey(targets[0])
+      ));
+    } catch (error) {
+      setIsNotionTargetModalOpen(false);
+      Alert.alert('Notion 캘린더 조회 실패', error?.message || '선택 가능한 Notion 캘린더를 불러오지 못했습니다.');
+    } finally {
+      setIsNotionTargetLoading(false);
+    }
+  }, [loadNotionCalendarTargets]);
+
+  const handleSaveNotionTarget = async () => {
+    const selectedTarget = notionCalendarTargets.find((target) => getNotionTargetKey(target) === selectedNotionTargetKey);
+    if (!selectedTarget) {
+      Alert.alert('캘린더 선택 필요', '연결할 Notion 캘린더를 선택해주세요.');
+      return;
+    }
+
+    try {
+      setIsNotionTargetSaving(true);
+      await configureNotionCalendarTarget(selectedTarget);
+      setIsNotionTargetModalOpen(false);
+      Alert.alert('Notion 캘린더 연결 완료', `${selectedTarget.name || '선택한 캘린더'}로 동기화합니다.`);
+    } catch (error) {
+      Alert.alert('Notion 캘린더 연결 실패', error?.message || '선택한 Notion 캘린더를 등록하지 못했습니다.');
+    } finally {
+      setIsNotionTargetSaving(false);
+    }
+  };
+
+  const handleCreateNotionTarget = async () => {
+    try {
+      setIsNotionTargetSaving(true);
+      const created = await createNotionCalendarTarget({ name: `${workspace?.name || 'Meno'} Calendar` });
+      setIsNotionTargetModalOpen(false);
+      setNotionCalendarTargets((current) => [created, ...current.filter((target) => getNotionTargetKey(target) !== getNotionTargetKey(created))]);
+      setSelectedNotionTargetKey(getNotionTargetKey(created));
+      Alert.alert('Notion 캘린더 생성 완료', `${created?.name || 'Meno Calendar'}로 동기화합니다.`);
+    } catch (error) {
+      Alert.alert('Notion 캘린더 생성 실패', error?.message || '새 Notion 캘린더를 만들지 못했습니다.');
+    } finally {
+      setIsNotionTargetSaving(false);
+    }
+  };
+
   const completeNotionFromUrl = useCallback(async (url) => {
     const error = getUrlParam(url, 'error');
     if (error) {
@@ -443,9 +506,14 @@ export default function CalendarScreen() {
       if (Platform.OS === 'web' && typeof window !== 'undefined' && String(window.location.href).includes('code=')) {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
+      const status = await refreshNotionStatus?.().catch(() => null);
+      const shouldSelectCalendar = isReconnecting || !status?.calendarConfigured;
+      if (shouldSelectCalendar) {
+        await openNotionTargetModal();
+      }
       Alert.alert(
         isReconnecting ? 'Notion 권한 변경 완료' : 'Notion 연결 완료',
-        isReconnecting ? '새로 허용한 Notion 페이지로 캘린더 설정을 갱신했습니다.' : 'Notion 캘린더 연결이 완료되었습니다.',
+        shouldSelectCalendar ? '동기화할 Notion 캘린더를 선택해주세요.' : 'Notion 캘린더 설정이 준비되었습니다.',
       );
       return true;
     } catch (connectError) {
@@ -455,7 +523,7 @@ export default function CalendarScreen() {
       notionLinkModeRef.current = 'connect';
       setNotionAction(null);
     }
-  }, [completeNotionCalendarLink]);
+  }, [completeNotionCalendarLink, openNotionTargetModal, refreshNotionStatus]);
 
   useEffect(() => {
     let isMounted = true;
@@ -568,6 +636,10 @@ export default function CalendarScreen() {
       notionLinkModeRef.current = 'connect';
       const status = await refreshNotionStatus?.().catch(() => null);
       if (status?.linked) {
+        if (!status?.calendarConfigured) {
+          await openNotionTargetModal();
+          return;
+        }
         const result = await syncNotionCalendar();
         Alert.alert('Notion 설정 완료', getNotionSyncMessage(result));
         return;
@@ -614,6 +686,10 @@ export default function CalendarScreen() {
         await handleConnectNotion();
         return;
       }
+      if (!status?.calendarConfigured) {
+        await openNotionTargetModal();
+        return;
+      }
 
       setNotionAction(scope === 'workspace' ? 'sync-workspace' : 'sync-all');
       const result = scope === 'workspace'
@@ -658,6 +734,7 @@ export default function CalendarScreen() {
   const isReconnectingNotion = notionAction === 'relink';
   const isSyncingWorkspace = notionAction === 'sync-workspace';
   const isSyncingAll = notionAction === 'sync-all';
+  const isConfiguringNotionTarget = isNotionTargetLoading || isNotionTargetSaving;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -724,7 +801,9 @@ export default function CalendarScreen() {
               <Text style={styles.notionTitle}>{notionConnected ? 'Notion 연결됨' : 'Notion 연결 대기'}</Text>
               <Text style={styles.notionDesc}>
                 {notionConnected
-                  ? `${notionStatus?.calendarName || '캘린더 페이지'}로 내보냅니다.`
+                  ? (notionStatus?.calendarConfigured
+                    ? `${notionStatus?.calendarName || '캘린더 페이지'}로 내보냅니다.`
+                    : '동기화할 Notion 캘린더를 선택해주세요.')
                   : '계정을 승인하면 워크스페이스 일정을 Notion 캘린더와 동기화합니다.'}
               </Text>
             </View>
@@ -748,6 +827,10 @@ export default function CalendarScreen() {
               <TouchableOpacity style={[styles.notionSmallBtn, styles.notionBtnConnected, isNotionBusy && styles.disabledButton]} onPress={() => handleExport('all')} activeOpacity={0.85} disabled={isNotionBusy}>
                 {isSyncingAll ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="cloud-upload-outline" size={17} color="#FFFFFF" />}
                 <Text style={styles.notionSmallBtnText}>{isSyncingAll ? '내보내는 중' : '전체 워크스페이스'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.notionOutlineBtn, (isNotionBusy || isConfiguringNotionTarget) && styles.disabledButton]} onPress={openNotionTargetModal} activeOpacity={0.85} disabled={isNotionBusy || isConfiguringNotionTarget}>
+                {isConfiguringNotionTarget ? <ActivityIndicator size="small" color={COLORS.primary} /> : <Ionicons name="albums-outline" size={17} color={COLORS.primary} />}
+                <Text style={styles.notionOutlineBtnText}>{isConfiguringNotionTarget ? '불러오는 중' : '캘린더 선택/변경'}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.notionOutlineBtn, isNotionBusy && styles.disabledButton]} onPress={handleReconnectNotion} activeOpacity={0.85} disabled={isNotionBusy}>
                 {isReconnectingNotion ? <ActivityIndicator size="small" color={COLORS.primary} /> : <Ionicons name="open-outline" size={17} color={COLORS.primary} />}
@@ -964,6 +1047,85 @@ export default function CalendarScreen() {
             )}
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        visible={isNotionTargetModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsNotionTargetModalOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.formModalCard}>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalTitleWrap}>
+                <Text style={styles.modalTitle}>Notion 캘린더 선택</Text>
+                <Text style={styles.modalSubtitle}>Name·Date 속성이 있는 데이터베이스를 권장합니다.</Text>
+              </View>
+              <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setIsNotionTargetModalOpen(false)} disabled={isNotionTargetSaving}>
+                <Ionicons name="close" size={20} color={COLORS.subtext} />
+              </TouchableOpacity>
+            </View>
+
+            {isNotionTargetLoading ? (
+              <View style={styles.notionTargetLoading}>
+                <ActivityIndicator size="small" color={COLORS.primary} />
+                <Text style={styles.notionTargetLoadingText}>Notion 캘린더를 불러오는 중</Text>
+              </View>
+            ) : notionCalendarTargets.length ? (
+              <ScrollView style={styles.notionTargetList} contentContainerStyle={styles.notionTargetListContent} showsVerticalScrollIndicator={false}>
+                {notionCalendarTargets.map((target) => {
+                  const targetKey = getNotionTargetKey(target);
+                  const isSelected = targetKey === selectedNotionTargetKey;
+                  return (
+                    <TouchableOpacity
+                      key={targetKey}
+                      style={[styles.notionTargetRow, isSelected && styles.notionTargetRowActive]}
+                      onPress={() => setSelectedNotionTargetKey(targetKey)}
+                      activeOpacity={0.82}
+                      disabled={isNotionTargetSaving}
+                    >
+                      <Ionicons name={isSelected ? 'radio-button-on' : 'radio-button-off'} size={20} color={isSelected ? COLORS.primary : COLORS.border} />
+                      <View style={styles.notionTargetTextWrap}>
+                        <Text style={styles.notionTargetName} numberOfLines={1}>{target.name}</Text>
+                        <Text style={styles.notionTargetMeta} numberOfLines={1}>{target.url || target.id}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            ) : (
+              <View style={styles.notionTargetEmpty}>
+                <Ionicons name="albums-outline" size={34} color={COLORS.border} />
+                <Text style={styles.notionTargetEmptyText}>접근 가능한 Notion 데이터베이스가 없습니다.</Text>
+              </View>
+            )}
+
+            <View style={styles.notionTargetActions}>
+              <TouchableOpacity
+                style={[styles.notionTargetCreateBtn, isNotionTargetSaving && styles.disabledButton]}
+                onPress={handleCreateNotionTarget}
+                activeOpacity={0.85}
+                disabled={isNotionTargetSaving}
+              >
+                {isNotionTargetSaving ? <ActivityIndicator size="small" color={COLORS.primary} /> : <Ionicons name="add" size={18} color={COLORS.primary} />}
+                <Text style={styles.notionTargetCreateText}>새 Meno 캘린더 만들기</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.formSubmitBtn,
+                  (!selectedNotionTargetKey || isNotionTargetSaving || isNotionTargetLoading) && styles.disabledButton,
+                ]}
+                onPress={handleSaveNotionTarget}
+                activeOpacity={0.85}
+                disabled={!selectedNotionTargetKey || isNotionTargetSaving || isNotionTargetLoading}
+              >
+                {isNotionTargetSaving ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Ionicons name="checkmark" size={18} color="#FFFFFF" />}
+                <Text style={styles.formSubmitText}>선택한 캘린더 연결</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       <Modal
@@ -1250,11 +1412,26 @@ const styles = StyleSheet.create({
   formModalCard: { width: '100%', maxWidth: 560, maxHeight: '86%', backgroundColor: COLORS.surface, borderRadius: 8, padding: 18, borderWidth: 1, borderColor: COLORS.border },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 14 },
   modalHeaderActions: { flexDirection: 'row', gap: 8 },
+  modalTitleWrap: { flex: 1, minWidth: 0 },
   modalTitle: { fontSize: 22, fontWeight: '900', color: '#020617', letterSpacing: 0 },
   modalSubtitle: { fontSize: 12, color: COLORS.subtext, fontWeight: '700', marginTop: 5 },
   modalCloseBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
   modalTaskScroll: { maxHeight: 420 },
   modalTaskScrollContent: { gap: 10, paddingBottom: 2 },
+  notionTargetLoading: { minHeight: 154, alignItems: 'center', justifyContent: 'center', gap: 10 },
+  notionTargetLoadingText: { fontSize: 13, color: COLORS.subtext, fontWeight: '700', letterSpacing: 0 },
+  notionTargetList: { maxHeight: 300, marginBottom: 14 },
+  notionTargetListContent: { gap: 8, paddingBottom: 2 },
+  notionTargetRow: { minHeight: 58, borderRadius: 8, borderWidth: 1, borderColor: COLORS.border, backgroundColor: '#FFFFFF', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  notionTargetRowActive: { borderColor: COLORS.primary, backgroundColor: '#EEF2FF' },
+  notionTargetTextWrap: { flex: 1, minWidth: 0 },
+  notionTargetName: { fontSize: 14, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
+  notionTargetMeta: { fontSize: 11, color: COLORS.subtext, marginTop: 3, letterSpacing: 0 },
+  notionTargetEmpty: { minHeight: 154, alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 8, backgroundColor: '#F8FAFC', marginBottom: 14 },
+  notionTargetEmptyText: { fontSize: 13, color: COLORS.subtext, fontWeight: '700', textAlign: 'center', letterSpacing: 0 },
+  notionTargetActions: { gap: 8 },
+  notionTargetCreateBtn: { minHeight: 46, borderRadius: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 12 },
+  notionTargetCreateText: { color: COLORS.primary, fontSize: 14, fontWeight: '800', letterSpacing: 0 },
   formInput: { minHeight: 46, borderRadius: 8, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 12, color: COLORS.text, fontSize: 14, fontWeight: '600', letterSpacing: 0, marginBottom: 10 },
   formInputHalf: { flex: 1, marginBottom: 0 },
   formTextArea: { minHeight: 84, paddingTop: 12, textAlignVertical: 'top' },

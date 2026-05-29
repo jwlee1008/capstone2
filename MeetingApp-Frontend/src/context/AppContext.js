@@ -66,6 +66,17 @@ function normalizeList(data) {
   return [];
 }
 
+function normalizeNotionCalendarTargets(data) {
+  return normalizeList(data)
+    .map((item) => ({
+      id: item?.id || item?.databaseId,
+      name: item?.name || item?.title || '이름 없는 데이터베이스',
+      type: item?.type || 'database',
+      url: item?.url || item?.databaseUrl || '',
+    }))
+    .filter((item) => item.id || item.url);
+}
+
 function normalizeBackendDateTime(value) {
   if (!value) return null;
   const text = String(value).trim();
@@ -685,23 +696,53 @@ export function AppProvider({ children }) {
     return status;
   };
 
-  const ensureNotionCalendarReady = async ({ forceTargetRefresh = false } = {}) => {
+  const loadNotionCalendarTargets = async () => {
     const status = await refreshNotionStatus().catch(() => null);
-    if (!status?.linked && !forceTargetRefresh) throw new Error('Notion account is not linked.');
-    if (status?.calendarConfigured && !forceTargetRefresh) return status;
+    if (!status?.linked) throw new Error('Notion 계정을 먼저 연결해주세요.');
+    return normalizeNotionCalendarTargets(await api.getNotionCalendarTargets());
+  };
 
-    const created = await api.createNotionCalendarTarget({
-      name: `${workspace?.name || 'Meno'} Calendar`,
-    });
+  const markNotionCalendarConfigured = (status, target) => {
     const nextStatus = {
       ...(status || {}),
       linked: true,
       calendarConfigured: true,
-      calendarName: created?.name || status?.calendarName || 'Meno Calendar',
+      calendarName: target?.name || status?.calendarName || 'Notion 캘린더',
     };
     setNotionStatus(nextStatus);
     setNotionConnected(true);
     return nextStatus;
+  };
+
+  const createNotionCalendarTarget = async (payload = {}) => {
+    const created = await api.createNotionCalendarTarget({
+      name: `${workspace?.name || 'Meno'} Calendar`,
+      ...payload,
+    });
+    markNotionCalendarConfigured(notionStatus, created);
+    return created;
+  };
+
+  const configureNotionCalendarTarget = async (target, options = {}) => {
+    const databaseId = target?.databaseId || target?.id;
+    const databaseUrl = target?.databaseUrl || target?.url;
+    if (!databaseId && !databaseUrl) throw new Error('선택한 Notion 데이터베이스 정보를 찾을 수 없습니다.');
+
+    const result = await api.setNotionCalendarDatabase({
+      databaseId,
+      databaseUrl,
+      resetExistingEventLinks: Boolean(options.resetExistingEventLinks),
+    });
+    const status = await refreshNotionStatus().catch(() => notionStatus);
+    markNotionCalendarConfigured(status, target);
+    return { ...result, target };
+  };
+
+  const ensureNotionCalendarReady = async () => {
+    const status = await refreshNotionStatus().catch(() => null);
+    if (!status?.linked) throw new Error('Notion 계정을 먼저 연결해주세요.');
+    if (!status?.calendarConfigured) throw new Error('Notion 캘린더를 먼저 선택하거나 새로 만들어주세요.');
+    return status;
   };
 
   const startNotionCalendarLink = async (client = getOAuthClientType()) => {
@@ -715,7 +756,10 @@ export function AppProvider({ children }) {
     if (!code) throw new Error('Notion 인증 코드가 없습니다.');
     const linked = await api.linkNotionAccount(code, client);
     setNotionConnected(true);
-    await ensureNotionCalendarReady({ forceTargetRefresh: Boolean(options.forceTargetRefresh) });
+    if (options.forceTargetRefresh) {
+      setNotionStatus((prev) => prev ? { ...prev, calendarConfigured: false } : prev);
+    }
+    await refreshNotionStatus().catch(() => null);
     return linked;
   };
 
@@ -773,6 +817,9 @@ export function AppProvider({ children }) {
     deleteCalendarEvent,
     startNotionCalendarLink,
     completeNotionCalendarLink,
+    loadNotionCalendarTargets,
+    configureNotionCalendarTarget,
+    createNotionCalendarTarget,
     refreshNotionStatus,
     setNotionConnected,
     syncNotionCalendar,
