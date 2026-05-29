@@ -1,8 +1,11 @@
 import * as SecureStore from 'expo-secure-store';
+import { NativeModules, Platform } from 'react-native';
 
-const DEFAULT_BASE_URL = 'http://localhost:8080';
+const DEFAULT_BASE_URL = 'https://meno-app.shop';
+const DEFAULT_BACKEND_PORT = '8080';
 const REQUEST_TIMEOUT_MS = 12000;
 const UPLOAD_TIMEOUT_MS = 120000;
+const ANALYZE_TIMEOUT_MS = 120000;
 const TRANSCRIBE_TIMEOUT_MS = 12 * 60 * 1000;
 
 let accessToken = null;
@@ -70,8 +73,73 @@ const storage = {
 export const persistentStorage = storage;
 
 const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL || storage.getSync('API_BASE_URL');
+
+function isLoopbackHost(hostname) {
+  return ['localhost', '127.0.0.1', '::1'].includes(String(hostname || '').toLowerCase());
+}
+
+function trimTrailingSlash(value) {
+  return String(value || '').replace(/\/+$/, '');
+}
+
+function extractHostname(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const withoutScheme = text.includes('://') ? text.split('://')[1] : text;
+  const hostPort = withoutScheme.split('/')[0].split('?')[0];
+  if (!hostPort) return null;
+  if (hostPort.startsWith('[')) return hostPort.slice(1, hostPort.indexOf(']'));
+  return hostPort.split(':')[0] || null;
+}
+
+function getExpoDevServerHost() {
+  if (Platform.OS === 'web') return null;
+  const expoConstants = NativeModules?.ExponentConstants || NativeModules?.ExpoConstants || {};
+  const manifest = expoConstants.manifest || expoConstants.manifest2?.extra?.expoClient || {};
+  const candidates = [
+    NativeModules?.SourceCode?.scriptURL,
+    manifest.debuggerHost,
+    manifest.hostUri,
+    manifest.bundleUrl,
+    manifest.developer?.host,
+    expoConstants.linkingUri,
+  ];
+  for (const candidate of candidates) {
+    const host = extractHostname(candidate);
+    if (host) return host;
+  }
+  return null;
+}
+
+function getNativeDevBackendUrl() {
+  const devHost = getExpoDevServerHost();
+  if (!devHost || isLoopbackHost(devHost)) return null;
+  return `http://${devHost}:${DEFAULT_BACKEND_PORT}`;
+}
+
+function normalizeApiBaseUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  if (text === 'same-origin') return '';
+
+  if (Platform.OS !== 'web') {
+    const devHost = getExpoDevServerHost();
+    if (devHost && !isLoopbackHost(devHost)) {
+      try {
+        const url = new URL(text);
+        if (isLoopbackHost(url.hostname)) {
+          url.hostname = devHost;
+          return trimTrailingSlash(url.toString());
+        }
+      } catch {}
+    }
+  }
+
+  return trimTrailingSlash(text);
+}
+
 export const API_BASE_URL =
-  configuredBaseUrl === 'same-origin' ? '' : configuredBaseUrl || DEFAULT_BASE_URL;
+  normalizeApiBaseUrl(configuredBaseUrl) ?? getNativeDevBackendUrl() ?? DEFAULT_BASE_URL;
 
 export function setTokens(tokens = {}) {
   if (Object.prototype.hasOwnProperty.call(tokens, 'accessToken')) {
@@ -126,9 +194,9 @@ async function request(path, options = {}, retry = true) {
   } catch (error) {
     console.error('[api] network error', options.method || 'GET', `${API_BASE_URL}${path}`, error);
     if (error?.name === 'AbortError') {
-      throw new Error(`백엔드 응답이 없습니다. IntelliJ에서 서버가 켜져 있는지 확인해주세요. (${API_BASE_URL})`);
+      throw new Error(`백엔드 응답이 없습니다. 서버 상태와 API 주소를 확인해주세요. (${API_BASE_URL || 'same-origin'})`);
     }
-    throw new Error(`백엔드에 연결할 수 없습니다. IntelliJ 서버와 API 주소를 확인해주세요. (${API_BASE_URL})`);
+    throw new Error(`백엔드에 연결할 수 없습니다. 네트워크와 API 주소를 확인해주세요. (${API_BASE_URL || 'same-origin'})`);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -215,10 +283,28 @@ export const api = {
     });
   },
 
-  googleLogin(code) {
+  getGoogleAuthUrl(client = 'mobile') {
+    return request(`/api/oauth2/google/auth-url?client=${encodeURIComponent(client)}`);
+  },
+
+  googleLogin(code, client = 'mobile') {
     return request('/api/oauth2/google/callback', {
       method: 'POST',
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, client }),
+    }).then((data) => {
+      setTokens(data);
+      return data;
+    });
+  },
+
+  getNotionAuthUrl(client = 'mobile') {
+    return request(`/api/oauth2/notion/auth-url?client=${encodeURIComponent(client)}`);
+  },
+
+  notionLogin(code, client = 'mobile') {
+    return request('/api/oauth2/notion/callback', {
+      method: 'POST',
+      body: JSON.stringify({ code, client }),
     }).then((data) => {
       setTokens(data);
       return data;
@@ -361,6 +447,7 @@ export const api = {
   analyzeTranscript(transcriptId) {
     return request(`/api/meetings/transcripts/${transcriptId}/gemini-analyze`, {
       method: 'POST',
+      timeoutMs: ANALYZE_TIMEOUT_MS,
     });
   },
 
@@ -440,26 +527,36 @@ export const api = {
     return request('/api/user/account', { method: 'DELETE' });
   },
 
-  getNotionLinkAuthUrl() {
-    return request('/api/oauth2/notion/link/auth-url');
+  getNotionLinkAuthUrl(client = 'mobile') {
+    return request(`/api/oauth2/notion/link/auth-url?client=${encodeURIComponent(client)}`);
   },
 
-  linkNotionAccount(code) {
+  getNotionStatus() {
+    return request('/api/oauth2/notion/status');
+  },
+
+  linkNotionAccount(code, client = 'mobile') {
     return request('/api/oauth2/notion/link', {
       method: 'POST',
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, client }),
     });
   },
 
-  setNotionCalendarDatabase(payload) {
-    return request('/api/oauth2/notion/calendar-database', {
-      method: 'PUT',
+  createNotionCalendarTarget(payload = {}) {
+    return request('/api/oauth2/notion/calendar-targets', {
+      method: 'POST',
       body: JSON.stringify(payload),
     });
   },
 
   syncWorkspaceToNotion(workspaceId) {
     return request(`/api/calendar/workspaces/${workspaceId}/notion-sync`, {
+      method: 'POST',
+    });
+  },
+
+  syncAllWorkspacesToNotion() {
+    return request('/api/calendar/notion-sync-all-workspaces', {
       method: 'POST',
     });
   },

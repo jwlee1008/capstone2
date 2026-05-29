@@ -1,9 +1,54 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { api, clearTokens, persistentStorage, restoreTokens } from '../services/api';
 
 const AppContext = createContext(null);
 const LAST_WORKSPACE_ID_KEY = 'lastWorkspaceId';
+const OAUTH_PROVIDERS = new Set(['google', 'notion']);
+
+function getOAuthClientType() {
+  return Platform.OS === 'web' ? 'web' : 'mobile';
+}
+
+function normalizeOAuthProvider(provider) {
+  const normalized = String(provider || '').toLowerCase();
+  if (!OAUTH_PROVIDERS.has(normalized)) throw new Error('지원하지 않는 OAuth 제공자입니다.');
+  return normalized;
+}
+
+function getUrlParam(url, key) {
+  const query = String(url || '').split('?')[1]?.split('#')[0] || '';
+  if (!query) return null;
+  for (const param of query.split('&')) {
+    const [rawName, rawValue = ''] = param.split('=');
+    if (decodeURIComponent(rawName) === key) return decodeURIComponent(rawValue.replace(/\+/g, ' '));
+  }
+  return null;
+}
+
+function getHostname(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const withoutScheme = text.includes('://') ? text.split('://')[1] : text;
+  const hostPort = withoutScheme.split('/')[0].split('?')[0];
+  if (hostPort.startsWith('[')) return hostPort.slice(1, hostPort.indexOf(']'));
+  return hostPort.split(':')[0].toLowerCase();
+}
+
+function isLoopbackHost(hostname) {
+  return ['localhost', '127.0.0.1', '::1'].includes(String(hostname || '').toLowerCase());
+}
+
+function assertReachableMobileOAuthRedirect(data, label) {
+  if (Platform.OS === 'web') return;
+  const redirectUri = data?.redirectUri || getUrlParam(data?.authUrl, 'redirect_uri');
+  if (!isLoopbackHost(getHostname(redirectUri))) return;
+
+  throw new Error(
+    `${label} 콜백 주소가 localhost로 설정되어 있어 Expo Go에서 완료할 수 없습니다. `
+    + '백엔드 OAUTH_BASE_URL은 HTTPS 공개 주소로, Expo Go 딥링크 환경변수는 npm start 출력값으로 설정한 뒤 백엔드를 재시작해주세요.',
+  );
+}
 
 function getWorkspaceId(raw) {
   return raw?.id || raw?.workspaceId || raw?.workspace?.id;
@@ -148,11 +193,19 @@ function mapEvent(raw) {
   return {
     id: raw.id,
     title: raw.title,
+    description: raw.description || '',
+    location: raw.location || '',
     startAt: raw.startAt,
     endAt: raw.endAt,
+    isAllDay: Boolean(raw.isAllDay),
+    color: raw.color,
     date: raw.startAt ? String(raw.startAt).slice(0, 10) : '',
     workspaceId: raw.workspaceId,
     meetingId: raw.meetingId,
+    createdBy: raw.createdBy,
+    createdByName: raw.createdByName,
+    notionPageId: raw.notionPageId,
+    notionSyncedAt: raw.notionSyncedAt,
     relatedTasks: (raw.relatedTasks || []).map(mapTask),
   };
 }
@@ -228,6 +281,7 @@ export function AppProvider({ children }) {
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [taskStats, setTaskStats] = useState({ total: 0, todo: 0, inProgress: 0, done: 0 });
   const [notionConnected, setNotionConnected] = useState(false);
+  const [notionStatus, setNotionStatus] = useState(null);
   const [isApiMode, setIsApiMode] = useState(false);
   const [isRestoringSession, setIsRestoringSession] = useState(true);
 
@@ -241,6 +295,7 @@ export function AppProvider({ children }) {
     setCalendarEvents([]);
     setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
     setNotionConnected(false);
+    setNotionStatus(null);
     setIsApiMode(false);
     setIsRestoringSession(false);
     persistentStorage.remove(LAST_WORKSPACE_ID_KEY);
@@ -305,6 +360,13 @@ export function AppProvider({ children }) {
     setCalendarTasks(mappedTasks);
     setCalendarEvents(events.map(mapEvent));
     setTaskStats(countTaskStats(mappedTasks));
+    api.getNotionStatus().then((status) => {
+      setNotionStatus(status);
+      setNotionConnected(Boolean(status?.linked));
+    }).catch(() => {
+      setNotionStatus(null);
+      setNotionConnected(false);
+    });
     return mappedWorkspace;
   };
 
@@ -340,6 +402,7 @@ export function AppProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    if (Platform.OS === 'web') return undefined;
     if (!user?.id) return undefined;
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
@@ -349,21 +412,50 @@ export function AppProvider({ children }) {
     return () => subscription.remove();
   }, [user?.id, workspace?.id]);
 
+  const applyLoginResponse = async (data, fallback = {}) => {
+    setIsApiMode(true);
+    const profile = await api.getProfile().catch(() => null);
+    const mappedUser = mapUser(profile, { ...data, ...fallback, name: data?.name || fallback.name });
+    setUser(mappedUser);
+    await loadWorkspaceBundle(null, mappedUser).catch(() => {
+      setWorkspace(null);
+      setWorkspaces([]);
+      setInvitations([]);
+      setMeetings([]);
+      setCalendarTasks([]);
+      setCalendarEvents([]);
+    });
+    return mappedUser;
+  };
+
   const login = async ({ email, password, name }) => {
     try {
       const data = await api.login(email, password);
-      setIsApiMode(true);
-      const profile = await api.getProfile().catch(() => null);
-      const mappedUser = mapUser(profile, { ...data, email, name: data?.name || name });
-      setUser(mappedUser);
-      await loadWorkspaceBundle(null, mappedUser).catch(() => {
-        setWorkspace(null);
-        setWorkspaces([]);
-        setInvitations([]);
-        setMeetings([]);
-        setCalendarTasks([]);
-        setCalendarEvents([]);
-      });
+      await applyLoginResponse(data, { email, name });
+    } catch (error) {
+      resetAppState();
+      throw error;
+    }
+  };
+
+  const startOAuthLogin = async (provider, client = getOAuthClientType()) => {
+    const normalizedProvider = normalizeOAuthProvider(provider);
+    const data = normalizedProvider === 'notion'
+      ? await api.getNotionAuthUrl(client)
+      : await api.getGoogleAuthUrl(client);
+    if (!data?.authUrl) throw new Error('인증 URL을 받지 못했습니다.');
+    assertReachableMobileOAuthRedirect(data, normalizedProvider === 'notion' ? 'Notion 로그인' : 'Google 로그인');
+    return { ...data, provider: normalizedProvider, client: data.client || client };
+  };
+
+  const completeOAuthLogin = async (provider, code, client = getOAuthClientType()) => {
+    const normalizedProvider = normalizeOAuthProvider(provider);
+    if (!code) throw new Error('인증 코드가 없습니다.');
+    try {
+      const data = normalizedProvider === 'notion'
+        ? await api.notionLogin(code, client)
+        : await api.googleLogin(code, client);
+      return await applyLoginResponse(data, { provider: normalizedProvider });
     } catch (error) {
       resetAppState();
       throw error;
@@ -567,9 +659,14 @@ export function AppProvider({ children }) {
   const addCalendarEvent = async (event) => {
     const created = await api.createEvent({
       title: event.title,
-      startAt: event.startAt,
-      endAt: event.endAt,
+      description: event.description,
+      location: event.location,
+      startAt: normalizeBackendDateTime(event.startAt),
+      endAt: normalizeBackendDateTime(event.endAt),
+      isAllDay: Boolean(event.isAllDay),
+      color: event.color,
       workspaceId: event.workspaceId || workspace?.id,
+      meetingId: event.meetingId || null,
       participantUserIds: event.participantUserIds || [],
     });
     setCalendarEvents((prev) => [mapEvent(created), ...prev]);
@@ -581,23 +678,62 @@ export function AppProvider({ children }) {
     setCalendarEvents((prev) => prev.filter((event) => String(event.id) !== String(eventId)));
   };
 
-  const startNotionCalendarLink = async () => {
-    const data = await api.getNotionLinkAuthUrl();
-    if (!data?.authUrl) throw new Error('Notion 인증 URL을 받지 못했습니다.');
-    return data;
+  const refreshNotionStatus = async () => {
+    const status = await api.getNotionStatus();
+    setNotionStatus(status);
+    setNotionConnected(Boolean(status?.linked));
+    return status;
   };
 
-  const completeNotionCalendarLink = async (code) => {
-    if (!code) throw new Error('Notion 인증 코드가 없습니다.');
-    const linked = await api.linkNotionAccount(code);
+  const ensureNotionCalendarReady = async ({ forceTargetRefresh = false } = {}) => {
+    const status = await refreshNotionStatus().catch(() => null);
+    if (!status?.linked && !forceTargetRefresh) throw new Error('Notion account is not linked.');
+    if (status?.calendarConfigured && !forceTargetRefresh) return status;
+
+    const created = await api.createNotionCalendarTarget({
+      name: `${workspace?.name || 'Meno'} Calendar`,
+    });
+    const nextStatus = {
+      ...(status || {}),
+      linked: true,
+      calendarConfigured: true,
+      calendarName: created?.name || status?.calendarName || 'Meno Calendar',
+    };
+    setNotionStatus(nextStatus);
     setNotionConnected(true);
+    return nextStatus;
+  };
+
+  const startNotionCalendarLink = async (client = getOAuthClientType()) => {
+    const data = await api.getNotionLinkAuthUrl(client);
+    if (!data?.authUrl) throw new Error('Notion 인증 URL을 받지 못했습니다.');
+    assertReachableMobileOAuthRedirect(data, 'Notion 연동');
+    return { ...data, client: data.client || client };
+  };
+
+  const completeNotionCalendarLink = async (code, client = getOAuthClientType(), options = {}) => {
+    if (!code) throw new Error('Notion 인증 코드가 없습니다.');
+    const linked = await api.linkNotionAccount(code, client);
+    setNotionConnected(true);
+    await ensureNotionCalendarReady({ forceTargetRefresh: Boolean(options.forceTargetRefresh) });
     return linked;
   };
 
-  const syncNotionCalendar = async () => {
-    if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
-    await api.syncWorkspaceToNotion(workspace.id);
+  const syncWorkspaceNotionCalendar = async (workspaceId = workspace?.id) => {
+    if (!workspaceId) throw new Error('워크스페이스를 먼저 선택해주세요.');
+    await ensureNotionCalendarReady();
+    const result = await api.syncWorkspaceToNotion(workspaceId);
     setNotionConnected(true);
+    await refreshNotionStatus().catch(() => null);
+    return result;
+  };
+
+  const syncNotionCalendar = async () => {
+    await ensureNotionCalendarReady();
+    const result = await api.syncAllWorkspacesToNotion();
+    setNotionConnected(true);
+    await refreshNotionStatus().catch(() => null);
+    return result;
   };
 
   const value = useMemo(() => ({
@@ -610,9 +746,12 @@ export function AppProvider({ children }) {
     calendarEvents,
     taskStats,
     notionConnected,
+    notionStatus,
     isApiMode,
     isRestoringSession,
     login,
+    startOAuthLogin,
+    completeOAuthLogin,
     register,
     logout,
     updateUser,
@@ -634,10 +773,12 @@ export function AppProvider({ children }) {
     deleteCalendarEvent,
     startNotionCalendarLink,
     completeNotionCalendarLink,
+    refreshNotionStatus,
     setNotionConnected,
     syncNotionCalendar,
+    syncWorkspaceNotionCalendar,
     getMeetingById,
-  }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, notionConnected, isApiMode, isRestoringSession]);
+  }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, notionConnected, notionStatus, isApiMode, isRestoringSession]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
