@@ -3,7 +3,7 @@ import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, Te
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppContext } from '../context/AppContext';
-import { COLORS } from '../theme';
+import { CARD_SHADOW, COLORS, RADIUS } from '../theme';
 
 const isEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
@@ -69,7 +69,7 @@ export default function AddMeetingScreen({ navigation }) {
             <Text style={styles.label}>회의 이름 <Text style={styles.required}>*</Text></Text>
             <View style={[styles.inputWrap, focusedField === 'name' && styles.inputFocused]}>
               <Ionicons name="mic-outline" size={18} color={COLORS.subtext} style={styles.inputIcon} />
-              <TextInput style={styles.input} placeholder="예: 주간 스탠드업" placeholderTextColor="#A0AEC0" value={meetingName} onChangeText={setMeetingName} maxLength={50} onFocus={() => setFocusedField('name')} onBlur={() => setFocusedField(null)} />
+              <TextInput style={styles.input} placeholder="예: 주간 스탠드업" placeholderTextColor={COLORS.placeholder} value={meetingName} onChangeText={setMeetingName} maxLength={50} onFocus={() => setFocusedField('name')} onBlur={() => setFocusedField(null)} />
               <Text style={styles.charCount}>{meetingName.length}/50</Text>
             </View>
           </View>
@@ -79,7 +79,7 @@ export default function AddMeetingScreen({ navigation }) {
             <View style={styles.participantInputRow}>
               <View style={[styles.inputWrap, styles.participantInputWrap, focusedField === 'invite' && styles.inputFocused]}>
                 <Ionicons name="mail-outline" size={18} color={COLORS.subtext} style={styles.inputIcon} />
-                <TextInput style={styles.input} placeholder="가입한 이메일 입력 후 추가" placeholderTextColor="#A0AEC0" value={inviteInput} onChangeText={setInviteInput} onSubmitEditing={addInviteEmail} autoCapitalize="none" keyboardType="email-address" onFocus={() => setFocusedField('invite')} onBlur={() => setFocusedField(null)} />
+                <TextInput style={styles.input} placeholder="가입한 이메일 입력 후 추가" placeholderTextColor={COLORS.placeholder} value={inviteInput} onChangeText={setInviteInput} onSubmitEditing={addInviteEmail} autoCapitalize="none" keyboardType="email-address" onFocus={() => setFocusedField('invite')} onBlur={() => setFocusedField(null)} />
               </View>
               <TouchableOpacity style={[styles.addParticipantBtn, !inviteInput.trim() && styles.addBtnDisabled]} onPress={addInviteEmail} disabled={!inviteInput.trim()}>
                 <Ionicons name="add" size={22} color="#FFFFFF" />
@@ -113,34 +113,34 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.background },
   flex: { flex: 1 },
   scrollContent: { padding: 20, paddingBottom: 40 },
-  workspaceNotice: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: COLORS.border },
-  workspaceNoticeIcon: { width: 38, height: 38, borderRadius: 10, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  workspaceNotice: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: COLORS.border, ...CARD_SHADOW },
+  workspaceNoticeIcon: { width: 38, height: 38, borderRadius: RADIUS.sm, backgroundColor: COLORS.chip, alignItems: 'center', justifyContent: 'center' },
   workspaceNoticeLabel: { fontSize: 11, fontWeight: '700', color: COLORS.primary, marginBottom: 2 },
   workspaceNoticeName: { fontSize: 15, fontWeight: '700', color: COLORS.text },
   section: { marginBottom: 24 },
   label: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
   required: { color: COLORS.error },
   optional: { color: COLORS.subtext, fontWeight: '400', fontSize: 12 },
-  inputWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.inputBg, borderRadius: 12, borderWidth: 1.5, borderColor: 'transparent', paddingHorizontal: 12, height: 50 },
-  inputFocused: { borderColor: COLORS.primary, backgroundColor: '#EEF2FF' },
+  inputWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.inputBg, borderRadius: RADIUS.md, borderWidth: 1.5, borderColor: 'transparent', paddingHorizontal: 12, height: 50 },
+  inputFocused: { borderColor: COLORS.primary, backgroundColor: COLORS.chip },
   inputIcon: { marginRight: 10 },
   input: { flex: 1, fontSize: 15, color: COLORS.text },
   charCount: { fontSize: 11, color: COLORS.subtext },
   helperText: { fontSize: 12, color: COLORS.subtext, lineHeight: 18, marginTop: 8 },
   participantInputRow: { flexDirection: 'row', gap: 8 },
   participantInputWrap: { flex: 1 },
-  addParticipantBtn: { width: 50, height: 50, borderRadius: 12, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
+  addParticipantBtn: { width: 50, height: 50, borderRadius: RADIUS.md, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
   addBtnDisabled: { opacity: 0.4 },
   participantTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
-  participantTag: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 10, paddingVertical: 5, paddingLeft: 6, paddingRight: 8, borderWidth: 1, borderColor: COLORS.border, gap: 6 },
-  participantAvatar: { width: 24, height: 24, borderRadius: 7, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  participantTag: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: RADIUS.sm, paddingVertical: 5, paddingLeft: 6, paddingRight: 8, borderWidth: 1, borderColor: COLORS.border, gap: 6 },
+  participantAvatar: { width: 24, height: 24, borderRadius: RADIUS.xs, backgroundColor: COLORS.chip, alignItems: 'center', justifyContent: 'center' },
   participantAvatarText: { fontSize: 11, fontWeight: '700', color: COLORS.primary },
   participantTagText: { fontSize: 13, color: COLORS.text, fontWeight: '500' },
-  participantRemoveBtn: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  participantRemoveBtn: { width: 18, height: 18, borderRadius: RADIUS.pill, backgroundColor: COLORS.inputBg, alignItems: 'center', justifyContent: 'center' },
   textareaWrap: { height: 100, alignItems: 'flex-start', paddingTop: 12 },
   textarea: { height: 80 },
   charCountRight: { textAlign: 'right', fontSize: 11, color: COLORS.subtext, marginTop: 4 },
-  createBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: 16, height: 56, shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 8, marginTop: 8 },
+  createBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, height: 56, shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.3, shadowRadius: 12, elevation: 8, marginTop: 8 },
   createBtnDisabled: { opacity: 0.5, shadowOpacity: 0 },
   createBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700', letterSpacing: 0 },
 });

@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, shadow } from '../theme';
+import { RADIUS, colors, shadow } from '../theme';
 
 export default function Section({ title, action, children, style }) {
   return (
@@ -17,7 +17,7 @@ export default function Section({ title, action, children, style }) {
 const styles = StyleSheet.create({
   section: {
     backgroundColor: colors.surface,
-    borderRadius: 8,
+    borderRadius: RADIUS.lg,
     padding: 16,
     borderWidth: 1,
     borderColor: colors.line,

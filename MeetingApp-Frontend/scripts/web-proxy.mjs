@@ -10,6 +10,8 @@ const readPort = (value, fallback) => {
 const preferredProxyPort = readPort(process.env.PROXY_PORT, 8081);
 const preferredExpoPort = readPort(process.env.EXPO_PORT, 8082);
 const backendOrigin = process.env.BACKEND_ORIGIN || 'http://localhost:8080';
+const variantArg = process.argv.find((arg) => arg.startsWith('--variant='));
+const uiVariant = variantArg?.split('=')[1] || process.env.EXPO_PUBLIC_UI_VARIANT || 'toss';
 
 const isPortAvailable = (port) => new Promise((resolve) => {
   const tester = net.createServer();
@@ -110,6 +112,7 @@ const startExpo = () => {
     env: {
       ...process.env,
       EXPO_PUBLIC_API_BASE_URL: 'same-origin',
+      EXPO_PUBLIC_UI_VARIANT: uiVariant,
     },
   });
 
@@ -134,6 +137,7 @@ server.listen(proxyPort, () => {
   console.log(`\nFrontend proxy: http://localhost:${proxyPort}`);
   console.log(`Expo web:       http://localhost:${expoPort}`);
   console.log(`Backend:        ${backendOrigin}\n`);
+  console.log(`UI variant:     ${uiVariant}\n`);
   startExpo();
 });
 

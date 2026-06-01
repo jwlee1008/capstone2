@@ -1,6 +1,6 @@
 import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity } from 'react-native';
-import { colors } from '../theme';
+import { RADIUS, colors } from '../theme';
 
 export default function Button({ title, onPress, variant = 'primary', icon, loading, disabled, style }) {
   const isGhost = variant === 'ghost';
@@ -28,7 +28,7 @@ export default function Button({ title, onPress, variant = 'primary', icon, load
 const styles = StyleSheet.create({
   button: {
     minHeight: 48,
-    borderRadius: 8,
+    borderRadius: RADIUS.md,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -53,6 +53,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   darkText: {
-    color: colors.primary,
+    color: colors.chipText,
   },
 });

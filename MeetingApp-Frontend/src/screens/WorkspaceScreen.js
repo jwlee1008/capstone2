@@ -5,7 +5,7 @@ import Screen from '../components/Screen';
 import Section from '../components/Section';
 import Button from '../components/Button';
 import { useAppContext } from '../context/AppContext';
-import { colors } from '../theme';
+import { RADIUS, colors } from '../theme';
 
 export default function WorkspaceScreen() {
   const { workspace, createWorkspace, inviteMember } = useAppContext();
@@ -133,21 +133,21 @@ const styles = StyleSheet.create({
   },
   badge: {
     backgroundColor: colors.chip,
-    borderRadius: 8,
+    borderRadius: RADIUS.sm,
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
   badgeText: {
-    color: colors.primary,
+    color: colors.chipText,
     fontWeight: '700',
   },
   input: {
     minHeight: 50,
     borderWidth: 1,
     borderColor: colors.line,
-    borderRadius: 8,
+    borderRadius: RADIUS.md,
     paddingHorizontal: 14,
-    backgroundColor: '#FBFCFE',
+    backgroundColor: colors.panel,
     marginBottom: 12,
   },
   memberRow: {
@@ -160,8 +160,8 @@ const styles = StyleSheet.create({
   avatar: {
     width: 40,
     height: 40,
-    borderRadius: 8,
-    backgroundColor: colors.ink,
+    borderRadius: RADIUS.sm,
+    backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -195,7 +195,7 @@ const styles = StyleSheet.create({
   iconButton: {
     width: 50,
     height: 50,
-    borderRadius: 8,
+    borderRadius: RADIUS.md,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',

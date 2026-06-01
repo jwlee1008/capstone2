@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAppContext } from '../context/AppContext';
 import { persistentStorage } from '../services/api';
-import { COLORS } from '../theme';
+import { COLORS, RADIUS } from '../theme';
 
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
 const CALENDAR_VIEW_MONTH_KEY = 'calendarViewMonth';
@@ -1145,16 +1145,16 @@ export default function CalendarScreen() {
                 <Ionicons name="close" size={20} color={COLORS.subtext} />
               </TouchableOpacity>
             </View>
-            <TextInput style={styles.formInput} value={eventForm.title} onChangeText={(title) => setEventForm((prev) => ({ ...prev, title }))} placeholder="일정 제목" placeholderTextColor="#94A3B8" />
+            <TextInput style={styles.formInput} value={eventForm.title} onChangeText={(title) => setEventForm((prev) => ({ ...prev, title }))} placeholder="일정 제목" placeholderTextColor={COLORS.placeholder} />
             <View style={styles.formRow}>
-              <TextInput style={[styles.formInput, styles.formInputHalf]} value={eventForm.date} onChangeText={(date) => setEventForm((prev) => ({ ...prev, date }))} placeholder="YYYY-MM-DD" placeholderTextColor="#94A3B8" />
-              <TextInput style={[styles.formInput, styles.formInputHalf]} value={eventForm.location} onChangeText={(location) => setEventForm((prev) => ({ ...prev, location }))} placeholder="장소" placeholderTextColor="#94A3B8" />
+              <TextInput style={[styles.formInput, styles.formInputHalf]} value={eventForm.date} onChangeText={(date) => setEventForm((prev) => ({ ...prev, date }))} placeholder="YYYY-MM-DD" placeholderTextColor={COLORS.placeholder} />
+              <TextInput style={[styles.formInput, styles.formInputHalf]} value={eventForm.location} onChangeText={(location) => setEventForm((prev) => ({ ...prev, location }))} placeholder="장소" placeholderTextColor={COLORS.placeholder} />
             </View>
             <View style={styles.formRow}>
-              <TextInput style={[styles.formInput, styles.formInputHalf]} value={eventForm.startTime} onChangeText={(startTime) => setEventForm((prev) => ({ ...prev, startTime }))} placeholder="시작 HH:mm" placeholderTextColor="#94A3B8" />
-              <TextInput style={[styles.formInput, styles.formInputHalf]} value={eventForm.endTime} onChangeText={(endTime) => setEventForm((prev) => ({ ...prev, endTime }))} placeholder="종료 HH:mm" placeholderTextColor="#94A3B8" />
+              <TextInput style={[styles.formInput, styles.formInputHalf]} value={eventForm.startTime} onChangeText={(startTime) => setEventForm((prev) => ({ ...prev, startTime }))} placeholder="시작 HH:mm" placeholderTextColor={COLORS.placeholder} />
+              <TextInput style={[styles.formInput, styles.formInputHalf]} value={eventForm.endTime} onChangeText={(endTime) => setEventForm((prev) => ({ ...prev, endTime }))} placeholder="종료 HH:mm" placeholderTextColor={COLORS.placeholder} />
             </View>
-            <TextInput style={[styles.formInput, styles.formTextArea]} value={eventForm.description} onChangeText={(description) => setEventForm((prev) => ({ ...prev, description }))} placeholder="메모" placeholderTextColor="#94A3B8" multiline />
+            <TextInput style={[styles.formInput, styles.formTextArea]} value={eventForm.description} onChangeText={(description) => setEventForm((prev) => ({ ...prev, description }))} placeholder="메모" placeholderTextColor={COLORS.placeholder} multiline />
             <TouchableOpacity style={[styles.formSubmitBtn, isEventSaving && styles.disabledButton]} onPress={handleSaveEvent} activeOpacity={0.85} disabled={isEventSaving}>
               {isEventSaving ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Ionicons name="checkmark" size={18} color="#FFFFFF" />}
               <Text style={styles.formSubmitText}>{isEventSaving ? '저장 중' : '일정 저장'}</Text>
@@ -1284,9 +1284,9 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   headerTitle: { fontSize: 24, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  headerBadge: { backgroundColor: '#EEF2FF', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
-  headerBadgeText: { color: COLORS.primary, fontWeight: '700', fontSize: 12 },
-  addEventBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
+  headerBadge: { backgroundColor: COLORS.chip, borderRadius: RADIUS.sm, paddingHorizontal: 10, paddingVertical: 5 },
+  headerBadgeText: { color: COLORS.chipText, fontWeight: '700', fontSize: 12 },
+  addEventBtn: { width: 34, height: 34, borderRadius: RADIUS.sm, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
   workspacePanel: {
     backgroundColor: COLORS.surface,
     borderRadius: 8,
@@ -1301,8 +1301,8 @@ const styles = StyleSheet.create({
   workspaceLabel: { fontSize: 11, fontWeight: '800', color: COLORS.primary, letterSpacing: 0 },
   workspaceName: { fontSize: 17, fontWeight: '800', color: COLORS.text, marginTop: 3, letterSpacing: 0 },
   workspaceChipRow: { gap: 8, paddingTop: 12, paddingRight: 2 },
-  workspaceChip: { minHeight: 36, maxWidth: 180, borderRadius: 8, backgroundColor: '#F1F5F9', paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 5 },
-  workspaceChipActive: { backgroundColor: '#EEF2FF', borderWidth: 1, borderColor: COLORS.primary },
+  workspaceChip: { minHeight: 36, maxWidth: 180, borderRadius: RADIUS.sm, backgroundColor: COLORS.inputBg, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  workspaceChipActive: { backgroundColor: COLORS.chip, borderWidth: 1, borderColor: COLORS.primary },
   workspaceChipText: { fontSize: 12, color: COLORS.subtext, fontWeight: '800', letterSpacing: 0 },
   workspaceChipTextActive: { color: COLORS.primary },
   notionCard: {
@@ -1317,7 +1317,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   notionTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  notionIconWrap: { width: 46, height: 46, borderRadius: 8, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  notionIconWrap: { width: 46, height: 46, borderRadius: RADIUS.md, backgroundColor: COLORS.chip, alignItems: 'center', justifyContent: 'center' },
   notionCopy: { flex: 1 },
   notionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text, letterSpacing: 0 },
   notionDesc: { fontSize: 12, color: COLORS.subtext, lineHeight: 18, marginTop: 3 },
@@ -1346,13 +1346,13 @@ const styles = StyleSheet.create({
   monthHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
   monthTitle: { fontSize: 26, fontWeight: '800', color: '#020617', letterSpacing: 0 },
   monthNav: { flexDirection: 'row', gap: 10 },
-  monthNavBtn: { width: 48, height: 48, borderRadius: 8, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  monthNavBtn: { width: 48, height: 48, borderRadius: RADIUS.md, backgroundColor: COLORS.inputBg, alignItems: 'center', justifyContent: 'center' },
   weekRow: { flexDirection: 'row', marginBottom: 8 },
   weekLabel: { width: `${100 / 7}%`, textAlign: 'center', color: '#8C8C8C', fontSize: 15, fontWeight: '700', letterSpacing: 0 },
   monthGrid: { flexDirection: 'row', flexWrap: 'wrap' },
   dayCell: { width: `${100 / 7}%`, minHeight: 92, paddingHorizontal: 2, paddingTop: 5, borderRadius: 6 },
   outsideDayCell: { opacity: 0.42 },
-  selectedDayCell: { backgroundColor: '#F8FAFC' },
+  selectedDayCell: { backgroundColor: COLORS.panel },
   dayNumberWrap: { height: 25, alignItems: 'center', justifyContent: 'center', alignSelf: 'center', minWidth: 25, borderRadius: 13 },
   todayNumberWrap: { backgroundColor: '#2EA9E8' },
   dayNumber: { fontSize: 18, fontWeight: '700', color: '#0F172A', letterSpacing: 0 },
@@ -1368,7 +1368,7 @@ const styles = StyleSheet.create({
   monthTasksSection: { marginBottom: 10 },
   monthTasksToggle: { minHeight: 54, borderRadius: 8, backgroundColor: COLORS.surface, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   monthTasksToggleText: { flexDirection: 'row', alignItems: 'baseline', gap: 8, flex: 1 },
-  inlineAddBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  inlineAddBtn: { width: 34, height: 34, borderRadius: RADIUS.sm, backgroundColor: COLORS.chip, alignItems: 'center', justifyContent: 'center' },
   sectionTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
   sectionCount: { fontSize: 12, color: COLORS.subtext, fontWeight: '700' },
   monthTaskList: { marginTop: 10, gap: 10 },
@@ -1389,7 +1389,7 @@ const styles = StyleSheet.create({
   eventItem: { backgroundColor: COLORS.surface, borderRadius: 8, borderLeftWidth: 5, borderLeftColor: EVENT_TONE.border, padding: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 4, elevation: 1 },
   eventIconWrap: { width: 34, height: 34, borderRadius: 8, backgroundColor: EVENT_TONE.background, alignItems: 'center', justifyContent: 'center' },
   eventDescription: { fontSize: 12, color: COLORS.text, lineHeight: 17, marginTop: 7, letterSpacing: 0 },
-  modalTaskItem: { backgroundColor: '#F8FAFC', shadowOpacity: 0, elevation: 0 },
+  modalTaskItem: { backgroundColor: COLORS.panel, shadowOpacity: 0, elevation: 0 },
   taskContent: { flex: 1, minWidth: 0 },
   taskTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   taskTitle: { flex: 1, fontSize: 14, lineHeight: 20, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
@@ -1397,14 +1397,14 @@ const styles = StyleSheet.create({
   statusChipText: { fontSize: 10, fontWeight: '800', letterSpacing: 0 },
   taskMeta: { fontSize: 11, color: COLORS.subtext, marginTop: 6, letterSpacing: 0 },
   statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
-  statusBtn: { borderRadius: 6, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: '#F1F5F9' },
-  statusBtnActive: { backgroundColor: '#EEF2FF' },
+  statusBtn: { borderRadius: RADIUS.xs, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: COLORS.inputBg },
+  statusBtnActive: { backgroundColor: COLORS.chip },
   statusBtnText: { fontSize: 11, color: COLORS.subtext, fontWeight: '800', letterSpacing: 0 },
   statusBtnTextActive: { color: COLORS.primary },
   colorRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 10 },
   colorSwatch: { width: 24, height: 24, borderRadius: 6, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   colorSwatchActive: { borderWidth: 3 },
-  deleteBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center' },
+  deleteBtn: { width: 34, height: 34, borderRadius: RADIUS.sm, backgroundColor: COLORS.errorSoft, alignItems: 'center', justifyContent: 'center' },
   emptyState: { backgroundColor: COLORS.surface, borderRadius: 8, paddingVertical: 26, paddingHorizontal: 18, alignItems: 'center', marginTop: 10 },
   emptyStateText: { color: COLORS.subtext, fontSize: 13, fontWeight: '700', marginTop: 8, textAlign: 'center', letterSpacing: 0 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.36)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 22 },
@@ -1415,7 +1415,7 @@ const styles = StyleSheet.create({
   modalTitleWrap: { flex: 1, minWidth: 0 },
   modalTitle: { fontSize: 22, fontWeight: '900', color: '#020617', letterSpacing: 0 },
   modalSubtitle: { fontSize: 12, color: COLORS.subtext, fontWeight: '700', marginTop: 5 },
-  modalCloseBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  modalCloseBtn: { width: 34, height: 34, borderRadius: RADIUS.sm, backgroundColor: COLORS.inputBg, alignItems: 'center', justifyContent: 'center' },
   modalTaskScroll: { maxHeight: 420 },
   modalTaskScrollContent: { gap: 10, paddingBottom: 2 },
   notionTargetLoading: { minHeight: 154, alignItems: 'center', justifyContent: 'center', gap: 10 },
@@ -1423,16 +1423,16 @@ const styles = StyleSheet.create({
   notionTargetList: { maxHeight: 300, marginBottom: 14 },
   notionTargetListContent: { gap: 8, paddingBottom: 2 },
   notionTargetRow: { minHeight: 58, borderRadius: 8, borderWidth: 1, borderColor: COLORS.border, backgroundColor: '#FFFFFF', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  notionTargetRowActive: { borderColor: COLORS.primary, backgroundColor: '#EEF2FF' },
+  notionTargetRowActive: { borderColor: COLORS.primary, backgroundColor: COLORS.chip },
   notionTargetTextWrap: { flex: 1, minWidth: 0 },
   notionTargetName: { fontSize: 14, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
   notionTargetMeta: { fontSize: 11, color: COLORS.subtext, marginTop: 3, letterSpacing: 0 },
-  notionTargetEmpty: { minHeight: 154, alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 8, backgroundColor: '#F8FAFC', marginBottom: 14 },
+  notionTargetEmpty: { minHeight: 154, alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: RADIUS.md, backgroundColor: COLORS.panel, marginBottom: 14 },
   notionTargetEmptyText: { fontSize: 13, color: COLORS.subtext, fontWeight: '700', textAlign: 'center', letterSpacing: 0 },
   notionTargetActions: { gap: 8 },
   notionTargetCreateBtn: { minHeight: 46, borderRadius: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: COLORS.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 12 },
   notionTargetCreateText: { color: COLORS.primary, fontSize: 14, fontWeight: '800', letterSpacing: 0 },
-  formInput: { minHeight: 46, borderRadius: 8, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 12, color: COLORS.text, fontSize: 14, fontWeight: '600', letterSpacing: 0, marginBottom: 10 },
+  formInput: { minHeight: 46, borderRadius: RADIUS.md, backgroundColor: COLORS.panel, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 12, color: COLORS.text, fontSize: 14, fontWeight: '600', letterSpacing: 0, marginBottom: 10 },
   formInputHalf: { flex: 1, marginBottom: 0 },
   formTextArea: { minHeight: 84, paddingTop: 12, textAlignVertical: 'top' },
   formRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },

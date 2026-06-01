@@ -5,7 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { COLORS } from '../theme';
+import { CARD_SHADOW, COLORS, RADIUS } from '../theme';
 import { useAppContext } from '../context/AppContext';
 import { persistentStorage } from '../services/api';
 import LoginScreen from '../screens/LoginScreen';
@@ -36,7 +36,7 @@ function CustomTabBar({ state, navigation }) {
         if (isCenter) {
           return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.8} style={styles.centerTabButton}><View style={[styles.centerIconWrapper, isFocused && styles.centerIconWrapperActive]}><Ionicons name={icons[route.name]} size={28} color="#FFFFFF" /></View><Text style={[styles.centerTabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
         }
-        return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.7} style={styles.tabButton}><Ionicons name={icons[route.name]} size={24} color={isFocused ? COLORS.primary : '#94A3B8'} /><Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
+        return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.7} style={styles.tabButton}><Ionicons name={icons[route.name]} size={24} color={isFocused ? COLORS.primary : COLORS.tabInactive} /><Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
       })}
     </View>
   );
@@ -44,7 +44,7 @@ function CustomTabBar({ state, navigation }) {
 
 function HomeStack() {
   return (
-    <Stack.Navigator screenOptions={{ headerStyle: { backgroundColor: COLORS.surface }, headerTintColor: COLORS.text, headerTitleStyle: { fontWeight: '700', fontSize: 17 }, headerShadowVisible: false, headerBackTitleVisible: false }}>
+    <Stack.Navigator screenOptions={{ headerStyle: { backgroundColor: COLORS.navigation }, headerTintColor: COLORS.text, headerTitleStyle: { fontWeight: '800', fontSize: 17 }, headerShadowVisible: false, headerBackTitleVisible: false }}>
       <Stack.Screen name="HomeMain" component={HomeScreen} options={{ headerShown: false }} />
       <Stack.Screen name="MeetingList" component={MeetingListScreen} options={{ title: '회의 목록' }} />
       <Stack.Screen name="AddMeeting" component={AddMeetingScreen} options={{ title: '회의 만들기', presentation: 'modal' }} />
@@ -107,12 +107,12 @@ export default function AppNavigator() {
 
 const styles = StyleSheet.create({
   loadingScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.background },
-  tabBarContainer: { flexDirection: 'row', backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 8, paddingHorizontal: 16, alignItems: 'flex-end', shadowColor: '#000', shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 8 },
+  tabBarContainer: { flexDirection: 'row', backgroundColor: COLORS.navigation, borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 8, paddingHorizontal: 16, alignItems: 'flex-end', ...CARD_SHADOW },
   tabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 4 },
   centerTabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: Platform.OS === 'web' ? -18 : -24 },
-  centerIconWrapper: { width: 60, height: 60, borderRadius: 30, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.34, shadowRadius: 8, elevation: 8 },
+  centerIconWrapper: { width: 60, height: 60, borderRadius: RADIUS.pill, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.28, shadowRadius: 12, elevation: 8 },
   centerIconWrapperActive: { backgroundColor: COLORS.primaryDark, transform: [{ scale: 1.04 }] },
-  tabLabel: { fontSize: 10, color: '#94A3B8', marginTop: 4, fontWeight: '500' },
-  centerTabLabel: { fontSize: 10, color: '#94A3B8', marginTop: 4, fontWeight: '500' },
+  tabLabel: { fontSize: 10, color: COLORS.tabInactive, marginTop: 4, fontWeight: '600' },
+  centerTabLabel: { fontSize: 10, color: COLORS.tabInactive, marginTop: 4, fontWeight: '600' },
   tabLabelActive: { color: COLORS.primary, fontWeight: '700' },
 });
