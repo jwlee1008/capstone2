@@ -175,6 +175,12 @@ async function parseResponse(response) {
   }
 }
 
+function createRequestError(message, details = {}) {
+  const error = new Error(String(message));
+  Object.assign(error, details);
+  return error;
+}
+
 async function request(path, options = {}, retry = true) {
   await restoreTokens();
   const { timeoutMs, ...fetchOptions } = options;
@@ -194,9 +200,14 @@ async function request(path, options = {}, retry = true) {
   } catch (error) {
     console.error('[api] network error', options.method || 'GET', `${API_BASE_URL}${path}`, error);
     if (error?.name === 'AbortError') {
-      throw new Error(`백엔드 응답이 없습니다. 서버 상태와 API 주소를 확인해주세요. (${API_BASE_URL || 'same-origin'})`);
+      throw createRequestError(`백엔드 응답이 없습니다. 서버 상태와 API 주소를 확인해주세요. (${API_BASE_URL || 'same-origin'})`, {
+        code: 'REQUEST_TIMEOUT',
+        isTimeout: true,
+      });
     }
-    throw new Error(`백엔드에 연결할 수 없습니다. 네트워크와 API 주소를 확인해주세요. (${API_BASE_URL || 'same-origin'})`);
+    throw createRequestError(`백엔드에 연결할 수 없습니다. 네트워크와 API 주소를 확인해주세요. (${API_BASE_URL || 'same-origin'})`, {
+      code: 'NETWORK_ERROR',
+    });
   } finally {
     clearTimeout(timeoutId);
   }
@@ -210,7 +221,7 @@ async function request(path, options = {}, retry = true) {
   if (!response.ok) {
     const message = data?.message || data || `HTTP ${response.status}`;
     console.error('[api] request failed', options.method || 'GET', `${API_BASE_URL}${path}`, response.status, data);
-    throw new Error(String(message));
+    throw createRequestError(message, { status: response.status, data });
   }
   return data;
 }
@@ -235,19 +246,23 @@ async function appendRecordingFile(formData, asset) {
   const filename = getAssetName(asset);
   const contentType = inferAudioContentType(filename, asset?.mimeType || asset?.file?.type);
 
-  if (asset?.file) {
-    formData.append('file', asset.file, filename);
-    return;
-  }
-
   if (!asset?.uri) {
     throw new Error('업로드할 녹음 파일을 찾을 수 없습니다.');
   }
 
-  if (typeof File !== 'undefined') {
+  if (Platform.OS === 'web') {
+    if (asset?.file) {
+      formData.append('file', asset.file, filename);
+      return;
+    }
+
     const response = await fetch(asset.uri);
     const blob = await response.blob();
-    formData.append('file', new File([blob], filename, { type: contentType }));
+    if (typeof File !== 'undefined') {
+      formData.append('file', new File([blob], filename, { type: contentType }));
+    } else {
+      formData.append('file', blob, filename);
+    }
     return;
   }
 

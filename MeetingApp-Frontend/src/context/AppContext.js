@@ -282,6 +282,15 @@ function buildSessionFromBackend({ transcript, summary, tasks = [], events = [],
   };
 }
 
+function isDeferredTranscribeError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return error?.isTimeout
+    || [502, 503, 504].includes(Number(error?.status))
+    || message.includes('gateway time-out')
+    || message.includes('gateway timeout')
+    || message.includes('백엔드 응답이 없습니다');
+}
+
 export function AppProvider({ children }) {
   const [user, setUser] = useState(null);
   const [workspace, setWorkspace] = useState(null);
@@ -592,12 +601,20 @@ export function AppProvider({ children }) {
   const uploadRecordingAndTranscribe = async (meetingId, asset) => {
     const recording = await api.uploadRecording(meetingId, asset);
     const recordingId = recording.recordingId || recording.id;
+    if (!recordingId) throw new Error('업로드된 녹음 ID를 확인할 수 없습니다.');
+
+    api.transcribe(meetingId, recordingId)
+      .catch((error) => {
+        if (isDeferredTranscribeError(error)) return null;
+        console.error('[recording] transcribe request failed', error);
+        return null;
+      })
+      .finally(() => {
+        refreshMeetingData(meetingId).catch(() => null);
+      });
+
     await refreshMeetingData(meetingId).catch(() => null);
-    try {
-      return await api.transcribe(meetingId, recordingId);
-    } finally {
-      await refreshMeetingData(meetingId).catch(() => null);
-    }
+    return recording;
   };
 
   const updateSpeakerName = async (meetingId, sessionId, speakerKey, name) => {
