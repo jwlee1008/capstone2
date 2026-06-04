@@ -2,7 +2,7 @@
   "expo": {
     "name": "Meno",
     "slug": "meno",
-    "version": "1.0.4",
+    "version": "1.0.9",
     "scheme": "meno",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -14,7 +14,7 @@
     },
     "android": {
       "package": "com.jwlee.meno",
-      "versionCode": 5,
+      "versionCode": 10,
       "intentFilters": [
         {
           "action": "VIEW",

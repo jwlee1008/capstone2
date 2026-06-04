@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, shadow } from '../theme';
+import { colors } from '../theme';
 
 export default function Section({ title, action, children, style }) {
   return (
@@ -22,7 +22,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.line,
     marginTop: 14,
-    ...shadow,
   },
   header: {
     flexDirection: 'row',
@@ -33,6 +32,6 @@ const styles = StyleSheet.create({
   title: {
     color: colors.text,
     fontWeight: '700',
-    fontSize: 17,
+    fontSize: 16,
   },
 });

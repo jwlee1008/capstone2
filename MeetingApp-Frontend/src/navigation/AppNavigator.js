@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -33,10 +33,14 @@ function CustomTabBar({ state, navigation }) {
           const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
           if (!isFocused && !event.defaultPrevented) navigation.navigate(route.name);
         };
-        if (isCenter) {
-          return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.8} style={styles.centerTabButton}><View style={[styles.centerIconWrapper, isFocused && styles.centerIconWrapperActive]}><Ionicons name={icons[route.name]} size={28} color="#FFFFFF" /></View><Text style={[styles.centerTabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
-        }
-        return <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.7} style={styles.tabButton}><Ionicons name={icons[route.name]} size={24} color={isFocused ? COLORS.primary : '#94A3B8'} /><Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text></TouchableOpacity>;
+        return (
+          <TouchableOpacity key={route.key} onPress={onPress} activeOpacity={0.78} style={styles.tabButton}>
+            <View style={[styles.iconShell, isFocused && styles.iconShellActive, isCenter && styles.centerIconShell]}>
+              <Ionicons name={icons[route.name]} size={isCenter ? 24 : 22} color={isFocused ? COLORS.primary : COLORS.subtext} />
+            </View>
+            <Text style={[styles.tabLabel, isFocused && styles.tabLabelActive]}>{labels[route.name]}</Text>
+          </TouchableOpacity>
+        );
       })}
     </View>
   );
@@ -107,12 +111,11 @@ export default function AppNavigator() {
 
 const styles = StyleSheet.create({
   loadingScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.background },
-  tabBarContainer: { flexDirection: 'row', backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 8, paddingHorizontal: 16, alignItems: 'flex-end', shadowColor: '#000', shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 8 },
+  tabBarContainer: { flexDirection: 'row', backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 7, paddingHorizontal: 16, alignItems: 'center' },
   tabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 4 },
-  centerTabButton: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: Platform.OS === 'web' ? -18 : -24 },
-  centerIconWrapper: { width: 60, height: 60, borderRadius: 30, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.34, shadowRadius: 8, elevation: 8 },
-  centerIconWrapperActive: { backgroundColor: COLORS.primaryDark, transform: [{ scale: 1.04 }] },
-  tabLabel: { fontSize: 10, color: '#94A3B8', marginTop: 4, fontWeight: '500' },
-  centerTabLabel: { fontSize: 10, color: '#94A3B8', marginTop: 4, fontWeight: '500' },
+  iconShell: { width: 42, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  iconShellActive: { backgroundColor: COLORS.chip },
+  centerIconShell: { width: 48 },
+  tabLabel: { fontSize: 10, color: COLORS.subtext, marginTop: 3, fontWeight: '700' },
   tabLabelActive: { color: COLORS.primary, fontWeight: '700' },
 });

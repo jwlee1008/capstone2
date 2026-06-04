@@ -35,7 +35,7 @@ const STATUS_OPTIONS = [
 ];
 
 const TASK_TONES = [
-  { id: 'indigo', background: '#EEF2FF', border: '#8B91F8', text: '#4F46E5' },
+  { id: 'blue', background: COLORS.chip, border: '#93C5FD', text: COLORS.primary },
   { id: 'amber', background: '#FFF7E6', border: '#F5C451', text: '#946A22' },
   { id: 'sky', background: '#EAF5FF', border: '#7CC4F8', text: '#2A6F9E' },
   { id: 'rose', background: '#FDEAF2', border: '#E889A8', text: '#93465F' },
@@ -211,8 +211,11 @@ function formatEventTime(event) {
 
 function getNotionSyncMessage(result) {
   const syncedCount = result?.syncedCount ?? result?.requestedCount;
+  const details = [];
+  if (Number(result?.taskExportCount) > 0) details.push(`할일 ${Number(result.taskExportCount)}개 포함`);
+  if (Number(result?.failedCount) > 0) details.push(`실패 ${Number(result.failedCount)}개`);
   if (Number.isFinite(Number(syncedCount))) {
-    return `Notion 캘린더와 ${Number(syncedCount)}개 일정을 동기화했습니다.`;
+    return `Notion 캘린더와 ${Number(syncedCount)}개 일정을 동기화했습니다.${details.length ? ` (${details.join(', ')})` : ''}`;
   }
   return 'Notion 캘린더와 동기화했습니다.';
 }
@@ -1284,7 +1287,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   headerTitle: { fontSize: 24, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  headerBadge: { backgroundColor: '#EEF2FF', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
+  headerBadge: { backgroundColor: COLORS.chip, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
   headerBadgeText: { color: COLORS.primary, fontWeight: '700', fontSize: 12 },
   addEventBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
   workspacePanel: {
@@ -1301,8 +1304,8 @@ const styles = StyleSheet.create({
   workspaceLabel: { fontSize: 11, fontWeight: '800', color: COLORS.primary, letterSpacing: 0 },
   workspaceName: { fontSize: 17, fontWeight: '800', color: COLORS.text, marginTop: 3, letterSpacing: 0 },
   workspaceChipRow: { gap: 8, paddingTop: 12, paddingRight: 2 },
-  workspaceChip: { minHeight: 36, maxWidth: 180, borderRadius: 8, backgroundColor: '#F1F5F9', paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 5 },
-  workspaceChipActive: { backgroundColor: '#EEF2FF', borderWidth: 1, borderColor: COLORS.primary },
+  workspaceChip: { minHeight: 36, maxWidth: 180, borderRadius: 8, backgroundColor: COLORS.inputBg, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  workspaceChipActive: { backgroundColor: COLORS.chip, borderWidth: 1, borderColor: COLORS.primary },
   workspaceChipText: { fontSize: 12, color: COLORS.subtext, fontWeight: '800', letterSpacing: 0 },
   workspaceChipTextActive: { color: COLORS.primary },
   notionCard: {
@@ -1317,7 +1320,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   notionTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  notionIconWrap: { width: 46, height: 46, borderRadius: 8, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  notionIconWrap: { width: 46, height: 46, borderRadius: 8, backgroundColor: COLORS.chip, alignItems: 'center', justifyContent: 'center' },
   notionCopy: { flex: 1 },
   notionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text, letterSpacing: 0 },
   notionDesc: { fontSize: 12, color: COLORS.subtext, lineHeight: 18, marginTop: 3 },
@@ -1346,7 +1349,7 @@ const styles = StyleSheet.create({
   monthHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
   monthTitle: { fontSize: 26, fontWeight: '800', color: '#020617', letterSpacing: 0 },
   monthNav: { flexDirection: 'row', gap: 10 },
-  monthNavBtn: { width: 48, height: 48, borderRadius: 8, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  monthNavBtn: { width: 48, height: 48, borderRadius: 8, backgroundColor: COLORS.inputBg, alignItems: 'center', justifyContent: 'center' },
   weekRow: { flexDirection: 'row', marginBottom: 8 },
   weekLabel: { width: `${100 / 7}%`, textAlign: 'center', color: '#8C8C8C', fontSize: 15, fontWeight: '700', letterSpacing: 0 },
   monthGrid: { flexDirection: 'row', flexWrap: 'wrap' },
@@ -1368,7 +1371,7 @@ const styles = StyleSheet.create({
   monthTasksSection: { marginBottom: 10 },
   monthTasksToggle: { minHeight: 54, borderRadius: 8, backgroundColor: COLORS.surface, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   monthTasksToggleText: { flexDirection: 'row', alignItems: 'baseline', gap: 8, flex: 1 },
-  inlineAddBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  inlineAddBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: COLORS.chip, alignItems: 'center', justifyContent: 'center' },
   sectionTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
   sectionCount: { fontSize: 12, color: COLORS.subtext, fontWeight: '700' },
   monthTaskList: { marginTop: 10, gap: 10 },
@@ -1397,8 +1400,8 @@ const styles = StyleSheet.create({
   statusChipText: { fontSize: 10, fontWeight: '800', letterSpacing: 0 },
   taskMeta: { fontSize: 11, color: COLORS.subtext, marginTop: 6, letterSpacing: 0 },
   statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
-  statusBtn: { borderRadius: 6, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: '#F1F5F9' },
-  statusBtnActive: { backgroundColor: '#EEF2FF' },
+  statusBtn: { borderRadius: 6, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: COLORS.inputBg },
+  statusBtnActive: { backgroundColor: COLORS.chip },
   statusBtnText: { fontSize: 11, color: COLORS.subtext, fontWeight: '800', letterSpacing: 0 },
   statusBtnTextActive: { color: COLORS.primary },
   colorRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 10 },
@@ -1415,7 +1418,7 @@ const styles = StyleSheet.create({
   modalTitleWrap: { flex: 1, minWidth: 0 },
   modalTitle: { fontSize: 22, fontWeight: '900', color: '#020617', letterSpacing: 0 },
   modalSubtitle: { fontSize: 12, color: COLORS.subtext, fontWeight: '700', marginTop: 5 },
-  modalCloseBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  modalCloseBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: COLORS.inputBg, alignItems: 'center', justifyContent: 'center' },
   modalTaskScroll: { maxHeight: 420 },
   modalTaskScrollContent: { gap: 10, paddingBottom: 2 },
   notionTargetLoading: { minHeight: 154, alignItems: 'center', justifyContent: 'center', gap: 10 },
@@ -1423,7 +1426,7 @@ const styles = StyleSheet.create({
   notionTargetList: { maxHeight: 300, marginBottom: 14 },
   notionTargetListContent: { gap: 8, paddingBottom: 2 },
   notionTargetRow: { minHeight: 58, borderRadius: 8, borderWidth: 1, borderColor: COLORS.border, backgroundColor: '#FFFFFF', paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  notionTargetRowActive: { borderColor: COLORS.primary, backgroundColor: '#EEF2FF' },
+  notionTargetRowActive: { borderColor: COLORS.primary, backgroundColor: COLORS.chip },
   notionTargetTextWrap: { flex: 1, minWidth: 0 },
   notionTargetName: { fontSize: 14, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
   notionTargetMeta: { fontSize: 11, color: COLORS.subtext, marginTop: 3, letterSpacing: 0 },

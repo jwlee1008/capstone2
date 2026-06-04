@@ -1,24 +1,27 @@
 export const COLORS = {
-  primary: '#4F46E5',
-  primaryDark: '#3730A3',
-  secondary: '#7C3AED',
-  background: '#F8FAFC',
+  primary: '#2563EB',
+  primaryDark: '#1D4ED8',
+  secondary: '#0F766E',
+  background: '#F6F7F9',
   surface: '#FFFFFF',
-  text: '#1E293B',
-  subtext: '#64748B',
-  border: '#E2E8F0',
-  success: '#10B981',
-  warning: '#F59E0B',
-  error: '#EF4444',
-  inputBg: '#F1F5F9',
+  surfaceAlt: '#F9FAFB',
+  text: '#111827',
+  subtext: '#6B7280',
+  muted: '#9CA3AF',
+  border: '#E5E7EB',
+  success: '#059669',
+  warning: '#D97706',
+  error: '#DC2626',
+  inputBg: '#F3F4F6',
+  chip: '#EAF2FF',
 };
 
 export const CARD_SHADOW = {
   shadowColor: '#000',
-  shadowOffset: { width: 0, height: 2 },
-  shadowOpacity: 0.06,
-  shadowRadius: 6,
-  elevation: 3,
+  shadowOffset: { width: 0, height: 1 },
+  shadowOpacity: 0.04,
+  shadowRadius: 5,
+  elevation: 2,
 };
 
 export const colors = {
@@ -33,7 +36,7 @@ export const colors = {
   amber: COLORS.warning,
   red: COLORS.error,
   ink: '#111827',
-  chip: '#EEF2FF',
+  chip: COLORS.chip,
 };
 
 export const shadow = CARD_SHADOW;

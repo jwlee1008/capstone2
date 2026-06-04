@@ -7,6 +7,8 @@ const REQUEST_TIMEOUT_MS = 12000;
 const UPLOAD_TIMEOUT_MS = 120000;
 const ANALYZE_TIMEOUT_MS = 120000;
 const TRANSCRIBE_TIMEOUT_MS = 12 * 60 * 1000;
+const DOWNLOAD_TIMEOUT_MS = 120000;
+const NOTION_SYNC_TIMEOUT_MS = 180000;
 
 let accessToken = null;
 let refreshToken = null;
@@ -226,6 +228,68 @@ async function request(path, options = {}, retry = true) {
   return data;
 }
 
+function getFileNameFromContentDisposition(value) {
+  const header = String(value || '');
+  const encodedMatch = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1].replace(/"/g, ''));
+    } catch {
+      return encodedMatch[1].replace(/"/g, '');
+    }
+  }
+  const plainMatch = header.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] || null;
+}
+
+async function requestBinary(path, options = {}, retry = true) {
+  await restoreTokens();
+  const { timeoutMs, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs || DOWNLOAD_TIMEOUT_MS);
+  const headers = {
+    ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    ...(options.headers || {}),
+  };
+
+  let response;
+  try {
+    console.info('[api] binary request', options.method || 'GET', `${API_BASE_URL}${path}`);
+    response = await fetch(`${API_BASE_URL}${path}`, { ...fetchOptions, headers, signal: controller.signal });
+  } catch (error) {
+    console.error('[api] binary network error', options.method || 'GET', `${API_BASE_URL}${path}`, error);
+    if (error?.name === 'AbortError') {
+      throw createRequestError(`백엔드 응답이 없습니다. 서버 상태와 API 주소를 확인해주세요. (${API_BASE_URL || 'same-origin'})`, {
+        code: 'REQUEST_TIMEOUT',
+        isTimeout: true,
+      });
+    }
+    throw createRequestError(`백엔드에 연결할 수 없습니다. 네트워크와 API 주소를 확인해주세요. (${API_BASE_URL || 'same-origin'})`, {
+      code: 'NETWORK_ERROR',
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (response.status === 401 && retry && refreshToken) {
+    const refreshed = await refreshAuthToken();
+    if (refreshed) return requestBinary(path, options, false);
+  }
+
+  if (!response.ok) {
+    const data = await parseResponse(response);
+    const message = data?.message || data || `HTTP ${response.status}`;
+    console.error('[api] binary request failed', options.method || 'GET', `${API_BASE_URL}${path}`, response.status, data);
+    throw createRequestError(message, { status: response.status, data });
+  }
+
+  return {
+    arrayBuffer: await response.arrayBuffer(),
+    contentType: response.headers.get('content-type') || 'application/octet-stream',
+    fileName: getFileNameFromContentDisposition(response.headers.get('content-disposition')),
+  };
+}
+
 function getAssetName(asset) {
   return asset?.name || asset?.file?.name || 'recording.m4a';
 }
@@ -346,10 +410,18 @@ export const api = {
     return request('/api/user/profile');
   },
 
-  createWorkspace(name) {
+  createWorkspace(payload) {
+    const body = typeof payload === 'string' ? { name: payload } : payload;
     return request('/api/workspaces', {
       method: 'POST',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(body),
+    });
+  },
+
+  updateWorkspace(workspaceId, updates = {}) {
+    return request(`/api/workspaces/${workspaceId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
     });
   },
 
@@ -414,6 +486,20 @@ export const api = {
 
   getMeetingSummary(meetingId) {
     return request(`/api/meetings/${meetingId}/summary`);
+  },
+
+  exportMeetingPdf(meetingId, { includeEvents = true } = {}) {
+    return requestBinary(`/api/meetings/${meetingId}/export/pdf?includeEvents=${includeEvents ? 'true' : 'false'}`, {
+      method: 'GET',
+      timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    });
+  },
+
+  exportMeetingToNotion(meetingId, { includeEvents = true } = {}) {
+    return request(`/api/meetings/${meetingId}/notion-export?includeEvents=${includeEvents ? 'true' : 'false'}`, {
+      method: 'POST',
+      timeoutMs: ANALYZE_TIMEOUT_MS,
+    });
   },
 
   getRecordings(meetingId) {
@@ -565,6 +651,7 @@ export const api = {
     return request('/api/oauth2/notion/calendar-targets', {
       method: 'POST',
       body: JSON.stringify(payload),
+      timeoutMs: NOTION_SYNC_TIMEOUT_MS,
     });
   },
 
@@ -575,15 +662,40 @@ export const api = {
     });
   },
 
+  createNotionMeetingNotesTarget(payload = {}) {
+    return request('/api/oauth2/notion/meeting-notes-targets', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      timeoutMs: NOTION_SYNC_TIMEOUT_MS,
+    });
+  },
+
+  setNotionMeetingNotesDatabase(payload = {}) {
+    return request('/api/oauth2/notion/meeting-notes-database', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
   syncWorkspaceToNotion(workspaceId) {
     return request(`/api/calendar/workspaces/${workspaceId}/notion-sync`, {
       method: 'POST',
+      timeoutMs: NOTION_SYNC_TIMEOUT_MS,
     });
   },
 
   syncAllWorkspacesToNotion() {
     return request('/api/calendar/notion-sync-all-workspaces', {
       method: 'POST',
+      timeoutMs: NOTION_SYNC_TIMEOUT_MS,
+    });
+  },
+
+  syncEventsToNotionBatch(eventIds) {
+    return request('/api/calendar/events/notion-sync-batch', {
+      method: 'POST',
+      body: JSON.stringify({ eventIds }),
+      timeoutMs: NOTION_SYNC_TIMEOUT_MS,
     });
   },
 };

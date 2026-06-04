@@ -5,6 +5,10 @@ import { api, clearTokens, persistentStorage, restoreTokens } from '../services/
 const AppContext = createContext(null);
 const LAST_WORKSPACE_ID_KEY = 'lastWorkspaceId';
 const OAUTH_PROVIDERS = new Set(['google', 'notion']);
+const ANALYSIS_REFRESH_DELAYS_MS = [4000, 10000, 20000];
+const RECORDING_REFRESH_DELAYS_MS = [1500, 4000, 8000, 15000, 30000, 60000, 90000];
+const TASK_NOTION_EVENT_MARKER = '[meno-task-notion-export]';
+const TASK_NOTION_EVENT_COLOR = '#F59E0B';
 
 function getOAuthClientType() {
   return Platform.OS === 'web' ? 'web' : 'mobile';
@@ -86,6 +90,22 @@ function normalizeBackendDateTime(value) {
   return text;
 }
 
+function formatLocalDateTime(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join('-') + `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function addMinutesToLocalDateTime(value, minutes) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  date.setMinutes(date.getMinutes() + minutes);
+  return formatLocalDateTime(date);
+}
+
 function getSummaryTaskCount(summary, fallback = 0) {
   return summary?.taskCount ?? summary?.taskStats?.total ?? fallback;
 }
@@ -110,6 +130,8 @@ function mapWorkspace(raw, members = [], fallbackName = '') {
     slug: raw.slug || raw.workspace?.slug,
     ownerId: raw.ownerId || raw.owner?.id,
     ownerName: raw.ownerName || raw.owner?.name,
+    meetingCategory: raw.meetingCategory || raw.workspace?.meetingCategory || '',
+    meetingContext: raw.meetingContext || raw.workspace?.meetingContext || '',
     createdAt: raw.createdAt || raw.workspace?.createdAt,
     members,
     invitedEmails: [],
@@ -171,6 +193,14 @@ function splitSummary(summary) {
 function mapTranscriptSegment(segment, index) {
   const label = segment.speakerLabel || segment.speakerKey || 'SPEAKER_A';
   const speakerKey = label.replace('SPEAKER_', '');
+  const correctedText = segment.correctedContent || segment.content || segment.text || '';
+  const originalText = segment.originalContent || segment.content || segment.text || correctedText;
+  const corrections = normalizeList(segment.corrections)
+    .map((item) => ({
+      original: item?.original || '',
+      corrected: item?.corrected || '',
+    }))
+    .filter((item) => item.original || item.corrected);
   return {
     id: `${label}-${segment.sequence ?? index}`,
     speakerKey,
@@ -178,7 +208,13 @@ function mapTranscriptSegment(segment, index) {
     speakerName: segment.speakerName,
     userId: segment.userId,
     time: secondsToTime(segment.startSec),
-    text: segment.content || segment.text || '',
+    text: correctedText,
+    originalText,
+    correctedText,
+    displayText: segment.displayContent || correctedText,
+    correctionChanged: Boolean(segment.correctionChanged) || corrections.length > 0,
+    correctionStatusText: segment.correctionStatusText,
+    corrections,
   };
 }
 
@@ -191,6 +227,7 @@ function mapTask(raw) {
     assignee: raw.assigneeName || '담당자 미정',
     assigneeName: raw.assigneeName,
     dueDate: raw.dueDate ? String(raw.dueDate).slice(0, 10) : '',
+    dueDateTime: raw.dueDate || null,
     statusCode: raw.status || 'TODO',
     status: raw.status === 'DONE' ? '완료' : raw.status === 'IN_PROGRESS' ? '진행중' : '등록됨',
     source: raw.source === 'AI_GENERATED' ? '회의 기록' : '직접 등록',
@@ -201,10 +238,11 @@ function mapTask(raw) {
 }
 
 function mapEvent(raw) {
+  const description = raw.description || '';
   return {
     id: raw.id,
     title: raw.title,
-    description: raw.description || '',
+    description,
     location: raw.location || '',
     startAt: raw.startAt,
     endAt: raw.endAt,
@@ -217,6 +255,7 @@ function mapEvent(raw) {
     createdByName: raw.createdByName,
     notionPageId: raw.notionPageId,
     notionSyncedAt: raw.notionSyncedAt,
+    isTaskNotionExportEvent: isTaskNotionExportEvent({ description }),
     relatedTasks: (raw.relatedTasks || []).map(mapTask),
   };
 }
@@ -235,6 +274,52 @@ function mapUser(raw, fallback = {}) {
 
 function normalizeComparableText(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function getTaskNotionEventMarker(taskId) {
+  return `${TASK_NOTION_EVENT_MARKER}:${taskId}`;
+}
+
+function extractTaskNotionEventId(event) {
+  const match = String(event?.description || '').match(/\[meno-task-notion-export\]:(\d+)/);
+  return match?.[1] || null;
+}
+
+function isTaskNotionExportEvent(event) {
+  return String(event?.description || '').includes(TASK_NOTION_EVENT_MARKER);
+}
+
+function mapVisibleCalendarEvents(events = []) {
+  return events.map(mapEvent).filter((event) => !event.isTaskNotionExportEvent);
+}
+
+function getTaskExportStartAt(task) {
+  const rawDateTime = normalizeBackendDateTime(task.dueDateTime || task.dueDate);
+  const dateKey = String(rawDateTime || task.dueDate || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return null;
+  if (/T(?!00:00:00)/.test(String(rawDateTime || ''))) return rawDateTime;
+  return `${dateKey}T09:00:00`;
+}
+
+function buildTaskNotionEventPayload(task, workspaceId) {
+  const startAt = getTaskExportStartAt(task);
+  if (!startAt) return null;
+  return {
+    title: task.title,
+    description: [
+      task.description,
+      getTaskNotionEventMarker(task.id),
+      task.meetingId ? `meeting:${task.meetingId}` : null,
+    ].filter(Boolean).join('\n'),
+    location: '',
+    startAt,
+    endAt: addMinutesToLocalDateTime(startAt, 30),
+    isAllDay: false,
+    color: TASK_NOTION_EVENT_COLOR,
+    workspaceId,
+    meetingId: task.meetingId || null,
+    participantUserIds: [],
+  };
 }
 
 function isOwnWorkspaceTask(task, currentUser, workspaceId) {
@@ -260,6 +345,8 @@ function buildSessionFromBackend({ transcript, summary, tasks = [], events = [],
   segments.forEach((segment) => {
     if (segment.speakerName) speakerMap[segment.speakerKey] = segment.speakerName;
   });
+  const analyzedAt = summary?.analyzedAt || transcript?.analyzedAt || null;
+  const hasAnalysis = Boolean(analyzedAt || summary?.summary || transcript?.summary);
 
   return {
     id: transcript?.id || recording?.recordingId || `s${Date.now()}`,
@@ -268,12 +355,16 @@ function buildSessionFromBackend({ transcript, summary, tasks = [], events = [],
     startedAt: transcript?.createdAt || recording?.createdAt || new Date().toISOString(),
     duration: recording?.durationSec ? `${Math.round(recording.durationSec / 60)}분` : null,
     fileName: recording?.fileName || recording?.s3Key?.split('/').pop() || 'recording.m4a',
-    status: transcript ? 'completed' : 'processing',
-    processStatus: transcript ? 'done' : 'processing',
+    status: hasAnalysis ? 'completed' : transcript ? 'mapping' : 'processing',
+    processStatus: hasAnalysis ? 'done' : transcript ? 'needs_mapping' : 'processing',
+    analyzedAt,
     speakerMap,
     summary: summary?.summary || transcript?.summary || '',
     summaryBullets: splitSummary(summary?.summary || transcript?.summary),
     keywords: summary?.keywords || transcript?.keywords || [],
+    originalFullText: transcript?.originalFullText,
+    correctedFullText: transcript?.correctedFullText,
+    displayFullText: transcript?.displayFullText,
     transcript: segments,
     tasks: tasks.map(mapTask),
     events: events.map(mapEvent),
@@ -282,13 +373,50 @@ function buildSessionFromBackend({ transcript, summary, tasks = [], events = [],
   };
 }
 
-function isDeferredTranscribeError(error) {
+function buildOptimisticRecordingSession(recording, asset) {
+  const recordingId = recording?.recordingId || recording?.id || `upload-${Date.now()}`;
+  const fileName = recording?.fileName
+    || recording?.s3Key?.split('/').pop()
+    || asset?.name
+    || asset?.file?.name
+    || 'recording.m4a';
+
+  return {
+    id: recordingId,
+    transcriptId: null,
+    recordingId,
+    startedAt: recording?.createdAt || new Date().toISOString(),
+    duration: null,
+    fileName,
+    status: 'processing',
+    processStatus: 'processing',
+    analyzedAt: null,
+    speakerMap: {},
+    summary: '',
+    summaryBullets: [],
+    keywords: [],
+    originalFullText: '',
+    correctedFullText: '',
+    displayFullText: '',
+    transcript: [],
+    tasks: [],
+    events: [],
+    taskCount: 0,
+    eventCount: 0,
+  };
+}
+
+function isDeferredProcessingError(error) {
   const message = String(error?.message || '').toLowerCase();
   return error?.isTimeout
     || [502, 503, 504].includes(Number(error?.status))
     || message.includes('gateway time-out')
     || message.includes('gateway timeout')
     || message.includes('백엔드 응답이 없습니다');
+}
+
+function isDeferredTranscribeError(error) {
+  return isDeferredProcessingError(error);
 }
 
 export function AppProvider({ children }) {
@@ -378,7 +506,7 @@ export function AppProvider({ children }) {
     setWorkspace(mappedWorkspace);
     setMeetings(backendMeetings.map((meeting) => mapMeeting(meeting, members)));
     setCalendarTasks(mappedTasks);
-    setCalendarEvents(events.map(mapEvent));
+    setCalendarEvents(mapVisibleCalendarEvents(events));
     setTaskStats(countTaskStats(mappedTasks));
     api.getNotionStatus().then((status) => {
       setNotionStatus(status);
@@ -513,10 +641,11 @@ export function AppProvider({ children }) {
     return loadWorkspaceBundle(workspace?.id || null);
   };
 
-  const createWorkspace = async (name) => {
-    const created = await api.createWorkspace(name);
+  const createWorkspace = async (input) => {
+    const payload = typeof input === 'string' ? { name: input } : input;
+    const created = await api.createWorkspace(payload);
     const ownerMember = user ? [mapMember({ ...user, role: 'owner' })] : [];
-    const mapped = mapWorkspace(created, ownerMember, name);
+    const mapped = mapWorkspace(created, ownerMember, payload?.name);
     if (!mapped?.id) throw new Error('워크스페이스 생성 응답에 ID가 없습니다. 백엔드 응답을 확인해주세요.');
     persistentStorage.set(LAST_WORKSPACE_ID_KEY, String(mapped.id));
     setWorkspace(mapped);
@@ -527,6 +656,17 @@ export function AppProvider({ children }) {
     setTaskStats({ total: 0, todo: 0, inProgress: 0, done: 0 });
     await loadWorkspaceBundle(created).catch(() => null);
     return created;
+  };
+
+  const updateWorkspaceSettings = async (updates = {}) => {
+    if (!workspace?.id) throw new Error('워크스페이스를 먼저 선택해주세요.');
+    const result = await api.updateWorkspace(workspace.id, updates);
+    const mapped = mapWorkspace(result, workspace.members || [], workspace.name);
+    setWorkspace(mapped);
+    setWorkspaces((prev) => prev.map((item) => (
+      String(item.id) === String(mapped.id) ? { ...item, ...mapped, members: item.members || mapped.members } : item
+    )));
+    return mapped;
   };
 
   const acceptInvitation = async (invitationId) => {
@@ -574,7 +714,9 @@ export function AppProvider({ children }) {
       api.getEvents({ workspaceId: workspace?.id }).catch(() => []),
       api.getRecordings(meetingId).catch(() => []),
     ]);
-    const meetingEvents = events.filter((event) => !event.meetingId || String(event.meetingId) === String(meetingId));
+    const meetingEvents = events.filter((event) => (
+      !isTaskNotionExportEvent(event) && (!event.meetingId || String(event.meetingId) === String(meetingId))
+    ));
     const session = buildSessionFromBackend({ transcript, summary, tasks, events: meetingEvents, recordings });
     setMeetings((prev) => prev.map((meeting) => (
       String(meeting.id) === String(meetingId)
@@ -594,7 +736,7 @@ export function AppProvider({ children }) {
       setTaskStats(countTaskStats(nextTasks));
       return nextTasks;
     });
-    setCalendarEvents(events.map(mapEvent));
+    setCalendarEvents(mapVisibleCalendarEvents(events));
     return session;
   };
 
@@ -602,6 +744,13 @@ export function AppProvider({ children }) {
     const recording = await api.uploadRecording(meetingId, asset);
     const recordingId = recording.recordingId || recording.id;
     if (!recordingId) throw new Error('업로드된 녹음 ID를 확인할 수 없습니다.');
+
+    const optimisticSession = buildOptimisticRecordingSession(recording, asset);
+    setMeetings((prev) => prev.map((meeting) => (
+      String(meeting.id) === String(meetingId)
+        ? { ...meeting, sessions: [optimisticSession, ...(meeting.sessions || []).filter((item) => String(item.recordingId) !== String(recordingId))] }
+        : meeting
+    )));
 
     api.transcribe(meetingId, recordingId)
       .catch((error) => {
@@ -611,15 +760,56 @@ export function AppProvider({ children }) {
       })
       .finally(() => {
         refreshMeetingData(meetingId).catch(() => null);
+        scheduleMeetingRefresh(meetingId, RECORDING_REFRESH_DELAYS_MS);
       });
 
     await refreshMeetingData(meetingId).catch(() => null);
+    scheduleMeetingRefresh(meetingId, RECORDING_REFRESH_DELAYS_MS);
     return recording;
   };
 
-  const updateSpeakerName = async (meetingId, sessionId, speakerKey, name) => {
+  const scheduleMeetingRefresh = (meetingId, delays = ANALYSIS_REFRESH_DELAYS_MS) => {
+    delays.forEach((delay) => {
+      setTimeout(() => {
+        refreshMeetingData(meetingId).catch(() => null);
+      }, delay);
+    });
+  };
+
+  const getSessionForMeeting = (meetingId, sessionId) => {
     const meeting = getMeetingById(meetingId);
-    const session = meeting?.sessions?.find((item) => String(item.id) === String(sessionId)) || meeting?.sessions?.[0];
+    return meeting?.sessions?.find((item) => (
+      String(item.id) === String(sessionId) || String(item.transcriptId) === String(sessionId)
+    )) || meeting?.sessions?.[0];
+  };
+
+  const analyzeSessionAndRefresh = async (meetingId, session) => {
+    if (!session?.transcriptId) throw new Error('분석할 대화록이 없습니다.');
+
+    let analysisDeferred = false;
+    let analysisError = null;
+    try {
+      await api.analyzeTranscript(session.transcriptId);
+    } catch (error) {
+      if (isDeferredProcessingError(error)) {
+        analysisDeferred = true;
+      } else {
+        analysisError = error?.message || '할일 추출을 실행하지 못했습니다.';
+      }
+    }
+
+    await refreshMeetingData(meetingId).catch(() => null);
+    if (analysisDeferred) scheduleMeetingRefresh(meetingId);
+    return { analysisDeferred, analysisError };
+  };
+
+  const runTranscriptAnalysis = async (meetingId, sessionId) => {
+    const session = getSessionForMeeting(meetingId, sessionId);
+    return analyzeSessionAndRefresh(meetingId, session);
+  };
+
+  const updateSpeakerName = async (meetingId, sessionId, speakerKey, name) => {
+    const session = getSessionForMeeting(meetingId, sessionId);
     const nextMap = { ...(session?.speakerMap || {}), [speakerKey]: name };
 
     if (session?.transcriptId) {
@@ -633,9 +823,12 @@ export function AppProvider({ children }) {
         };
       });
       await api.saveSpeakerMappings(session.transcriptId, mappings);
-      await api.analyzeTranscript(session.transcriptId);
-      await refreshMeetingData(meetingId);
-      return;
+      setMeetings((prev) => prev.map((item) => (
+        String(item.id) === String(meetingId)
+          ? { ...item, sessions: (item.sessions || []).map((entry) => String(entry.id) === String(session.id) ? { ...entry, speakerMap: nextMap } : entry) }
+          : item
+      )));
+      return analyzeSessionAndRefresh(meetingId, { ...session, speakerMap: nextMap });
     }
 
     throw new Error('저장할 대화록이 없습니다.');
@@ -755,6 +948,38 @@ export function AppProvider({ children }) {
     return { ...result, target };
   };
 
+  const markNotionMeetingNotesConfigured = (status, target) => {
+    const nextStatus = {
+      ...(status || {}),
+      linked: true,
+      meetingNotesConfigured: true,
+      meetingNotesName: target?.name || status?.meetingNotesName || 'Meno 회의록',
+    };
+    setNotionStatus(nextStatus);
+    setNotionConnected(true);
+    return nextStatus;
+  };
+
+  const createNotionMeetingNotesTarget = async (payload = {}) => {
+    const created = await api.createNotionMeetingNotesTarget({
+      name: `${workspace?.name || 'Meno'} Meeting Notes`,
+      ...payload,
+    });
+    markNotionMeetingNotesConfigured(notionStatus, created);
+    return created;
+  };
+
+  const configureNotionMeetingNotesTarget = async (target) => {
+    const databaseId = target?.databaseId || target?.id;
+    const databaseUrl = target?.databaseUrl || target?.url;
+    if (!databaseId && !databaseUrl) throw new Error('선택한 Notion 데이터베이스 정보를 찾을 수 없습니다.');
+
+    const result = await api.setNotionMeetingNotesDatabase({ databaseId, databaseUrl });
+    const status = await refreshNotionStatus().catch(() => notionStatus);
+    markNotionMeetingNotesConfigured(status, target);
+    return { ...result, target };
+  };
+
   const ensureNotionCalendarReady = async () => {
     const status = await refreshNotionStatus().catch(() => null);
     if (!status?.linked) throw new Error('Notion 계정을 먼저 연결해주세요.');
@@ -780,18 +1005,130 @@ export function AppProvider({ children }) {
     return linked;
   };
 
+  const prepareWorkspaceNotionEvents = async (workspaceId) => {
+    const [tasks, events] = await Promise.all([
+      api.getTasks({ workspaceId }).then(normalizeList).catch(() => []),
+      api.getEvents({ workspaceId }).then(normalizeList).catch(() => []),
+    ]);
+    const mappedTasks = tasks.map(mapTask);
+    const mappedEvents = events.map(mapEvent);
+    const taskEventsByTaskId = new Map();
+
+    mappedEvents
+      .filter(isTaskNotionExportEvent)
+      .forEach((event) => {
+        const taskId = extractTaskNotionEventId(event);
+        if (taskId && event.id) taskEventsByTaskId.set(String(taskId), event);
+      });
+
+    const taskEventIds = [];
+    for (const task of mappedTasks) {
+      if (!task.id || !task.title || !task.dueDate) continue;
+      const payload = buildTaskNotionEventPayload(task, workspaceId);
+      if (!payload) continue;
+
+      const existingEvent = taskEventsByTaskId.get(String(task.id));
+      if (existingEvent?.id) {
+        const needsUpdate = existingEvent.title !== payload.title
+          || existingEvent.startAt !== payload.startAt
+          || existingEvent.endAt !== payload.endAt
+          || existingEvent.description !== payload.description;
+        if (needsUpdate) {
+          await api.updateEvent(existingEvent.id, {
+            title: payload.title,
+            description: payload.description,
+            location: payload.location,
+            startAt: payload.startAt,
+            endAt: payload.endAt,
+            isAllDay: payload.isAllDay,
+            color: payload.color,
+          }).catch(() => null);
+        }
+        taskEventIds.push(existingEvent.id);
+      } else {
+        const created = await api.createEvent(payload);
+        if (created?.id) taskEventIds.push(created.id);
+      }
+    }
+
+    const visibleEventIds = mappedEvents
+      .filter((event) => !event.isTaskNotionExportEvent)
+      .map((event) => event.id)
+      .filter(Boolean);
+
+    return {
+      eventIds: Array.from(new Set([...visibleEventIds, ...taskEventIds])),
+      taskExportCount: taskEventIds.length,
+      visibleEventCount: visibleEventIds.length,
+    };
+  };
+
+  const normalizeNotionBatchResult = (result, meta = {}) => {
+    const rows = normalizeList(result?.results);
+    const failedCount = rows.filter((row) => row.status && row.status !== 'SUCCESS').length;
+    const syncedCount = rows.length > 0 ? rows.length - failedCount : Number(result?.requestedCount || 0);
+    return {
+      ...result,
+      ...meta,
+      syncedCount,
+      failedCount,
+    };
+  };
+
   const syncWorkspaceNotionCalendar = async (workspaceId = workspace?.id) => {
     if (!workspaceId) throw new Error('워크스페이스를 먼저 선택해주세요.');
     await ensureNotionCalendarReady();
-    const result = await api.syncWorkspaceToNotion(workspaceId);
+    const prepared = await prepareWorkspaceNotionEvents(workspaceId);
+    const result = prepared.eventIds.length > 0
+      ? await api.syncEventsToNotionBatch(prepared.eventIds)
+      : { requestedCount: 0, results: [] };
     setNotionConnected(true);
     await refreshNotionStatus().catch(() => null);
-    return result;
+    if (String(workspace?.id) === String(workspaceId)) await loadWorkspaceBundle(workspaceId).catch(() => null);
+    return normalizeNotionBatchResult(result, {
+      workspaceId,
+      taskExportCount: prepared.taskExportCount,
+      visibleEventCount: prepared.visibleEventCount,
+    });
   };
 
   const syncNotionCalendar = async () => {
     await ensureNotionCalendarReady();
-    const result = await api.syncAllWorkspacesToNotion();
+    const workspaceRows = workspaces.length > 0
+      ? workspaces
+      : normalizeList(await api.getWorkspaces().catch(() => []))
+        .map((item) => mapWorkspace(item))
+        .filter((item) => item?.id);
+    const preparedList = [];
+    for (const item of workspaceRows) {
+      if (!item?.id) continue;
+      preparedList.push(await prepareWorkspaceNotionEvents(item.id));
+    }
+    const eventIds = Array.from(new Set(preparedList.flatMap((item) => item.eventIds)));
+    const result = eventIds.length > 0
+      ? await api.syncEventsToNotionBatch(eventIds)
+      : { requestedCount: 0, results: [] };
+    setNotionConnected(true);
+    await refreshNotionStatus().catch(() => null);
+    await loadWorkspaceBundle(workspace?.id || null).catch(() => null);
+    return normalizeNotionBatchResult(result, {
+      workspaceCount: workspaceRows.length,
+      taskExportCount: preparedList.reduce((sum, item) => sum + item.taskExportCount, 0),
+      visibleEventCount: preparedList.reduce((sum, item) => sum + item.visibleEventCount, 0),
+    });
+  };
+
+  const exportMeetingPdf = async (meetingId, options = {}) => {
+    if (!meetingId) throw new Error('회의를 찾을 수 없습니다.');
+    return api.exportMeetingPdf(meetingId, options);
+  };
+
+  const exportMeetingToNotion = async (meetingId, options = {}) => {
+    if (!meetingId) throw new Error('회의를 찾을 수 없습니다.');
+    const status = await refreshNotionStatus().catch(() => null);
+    if (!status?.linked) throw new Error('Notion 계정을 먼저 연결해주세요.');
+    if (!status?.meetingNotesConfigured) throw new Error('회의록을 저장할 Notion 데이터베이스를 먼저 설정해주세요.');
+    const result = await api.exportMeetingToNotion(meetingId, options);
     setNotionConnected(true);
     await refreshNotionStatus().catch(() => null);
     return result;
@@ -819,6 +1156,7 @@ export function AppProvider({ children }) {
     selectWorkspace,
     refreshWorkspaceData,
     createWorkspace,
+    updateWorkspaceSettings,
     acceptInvitation,
     declineInvitation,
     inviteMember,
@@ -827,6 +1165,7 @@ export function AppProvider({ children }) {
     refreshMeetingData,
     uploadRecordingAndTranscribe,
     updateSpeakerName,
+    runTranscriptAnalysis,
     addCalendarTask,
     updateCalendarTask,
     deleteCalendarTask,
@@ -837,10 +1176,14 @@ export function AppProvider({ children }) {
     loadNotionCalendarTargets,
     configureNotionCalendarTarget,
     createNotionCalendarTarget,
+    configureNotionMeetingNotesTarget,
+    createNotionMeetingNotesTarget,
     refreshNotionStatus,
     setNotionConnected,
     syncNotionCalendar,
     syncWorkspaceNotionCalendar,
+    exportMeetingPdf,
+    exportMeetingToNotion,
     getMeetingById,
   }), [user, workspace, workspaces, invitations, meetings, calendarTasks, calendarEvents, taskStats, notionConnected, notionStatus, isApiMode, isRestoringSession]);
 

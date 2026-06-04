@@ -136,8 +136,7 @@ export default function LoginScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
           <View style={styles.headerSection}>
             <View style={styles.logoContainer}>
-              <View style={styles.logoCircle}><Ionicons name="mic" size={34} color="#FFFFFF" /></View>
-              <View style={styles.logoBadge}><Text style={styles.logoBadgeText}>PRO</Text></View>
+              <View style={styles.logoCircle}><Ionicons name="mic-outline" size={34} color={COLORS.primary} /></View>
             </View>
             <Text style={styles.appName}>Meno</Text>
             <Text style={styles.tagline}>회의 노트와 일정을 한곳에서 정리하세요</Text>
@@ -203,27 +202,25 @@ const styles = StyleSheet.create({
   scrollContent: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 32, paddingBottom: 40, justifyContent: 'center' },
   headerSection: { alignItems: 'center', marginBottom: 38 },
   logoContainer: { position: 'relative', marginBottom: 16 },
-  logoCircle: { width: 78, height: 78, borderRadius: 22, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.28, shadowRadius: 12, elevation: 8 },
-  logoBadge: { position: 'absolute', bottom: -4, right: -8, backgroundColor: COLORS.secondary, borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 2, borderColor: COLORS.background },
-  logoBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '700', letterSpacing: 0 },
-  appName: { fontSize: 28, fontWeight: '700', color: COLORS.text, letterSpacing: 0 },
+  logoCircle: { width: 78, height: 78, borderRadius: 8, backgroundColor: COLORS.chip, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#DCE8FF' },
+  appName: { fontSize: 28, fontWeight: '800', color: COLORS.text, letterSpacing: 0 },
   tagline: { fontSize: 14, color: COLORS.subtext, marginTop: 4 },
-  formCard: { backgroundColor: COLORS.surface, borderRadius: 18, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.07, shadowRadius: 12, elevation: 4 },
-  formTitle: { fontSize: 20, fontWeight: '700', color: COLORS.text, marginBottom: 20 },
+  formCard: { backgroundColor: COLORS.surface, borderRadius: 8, padding: 24, borderWidth: 1, borderColor: COLORS.border },
+  formTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text, marginBottom: 20 },
   fieldWrapper: { marginBottom: 16 },
   label: { fontSize: 13, fontWeight: '600', color: COLORS.text, marginBottom: 6 },
-  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.inputBg, borderRadius: 12, borderWidth: 1.5, borderColor: 'transparent', paddingHorizontal: 12, height: 50 },
-  inputFocused: { borderColor: COLORS.primary, backgroundColor: '#EEF2FF' },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.inputBg, borderRadius: 8, borderWidth: 1, borderColor: 'transparent', paddingHorizontal: 12, height: 50 },
+  inputFocused: { borderColor: COLORS.primary, backgroundColor: COLORS.chip },
   inputIcon: { marginRight: 10 },
   input: { flex: 1, fontSize: 15, color: COLORS.text, height: '100%' },
   eyeIcon: { padding: 4 },
-  loginButton: { backgroundColor: COLORS.primary, borderRadius: 14, height: 52, alignItems: 'center', justifyContent: 'center', shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.24, shadowRadius: 8, elevation: 6 },
+  loginButton: { backgroundColor: COLORS.primary, borderRadius: 8, height: 52, alignItems: 'center', justifyContent: 'center' },
   loginButtonDisabled: { opacity: 0.7 },
   loginButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700', letterSpacing: 0 },
   oauthDivider: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 16 },
   oauthDividerLine: { flex: 1, height: 1, backgroundColor: COLORS.border },
   oauthDividerText: { color: COLORS.subtext, fontSize: 11, fontWeight: '700', letterSpacing: 0 },
-  oauthButton: { height: 48, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 10 },
+  oauthButton: { height: 48, borderRadius: 8, borderWidth: 1, borderColor: COLORS.border, backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 10 },
   oauthButtonDisabled: { opacity: 0.66 },
   oauthButtonText: { color: COLORS.text, fontSize: 14, fontWeight: '700', letterSpacing: 0 },
   helperText: { textAlign: 'center', color: COLORS.subtext, fontSize: 11, marginTop: 12 },
